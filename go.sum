@@ -1,0 +1,6 @@
+github.com/ZoneCNH/xlib-standard v0.4.14 h1:ckZ4jqYLssPbCdBJ7iiE/euM569vx1Mfqg6n3vJUmmk=
+github.com/ZoneCNH/xlib-standard v0.4.14/go.mod h1:AwK+9PPXzxcxAJvdAWSd+uLlCRlZU+jMAwx+yXP+sS8=
+github.com/aliyun/aliyun-oss-go-sdk v3.0.2+incompatible h1:8psS8a+wKfiLt1iVDX79F7Y6wUM49Lcha2FMXt4UM8g=
+github.com/aliyun/aliyun-oss-go-sdk v3.0.2+incompatible/go.mod h1:T/Aws4fEfogEE9v+HPhhw+CntffsBHJ8nXQCwKr0/g8=
+golang.org/x/time v0.15.0 h1:bbrp8t3bGUeFOx08pvsMYRTCVSMk89u4tKbNOZbp88U=
+golang.org/x/time v0.15.0/go.mod h1:Y4YMaQmXwGQZoFaVFk4YpCt4FLQMYKZe9oeV/f4MSno=
