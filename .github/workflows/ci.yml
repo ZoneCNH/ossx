@@ -1,0 +1,79 @@
+# CI/CD Workflow 参考模板 — ossx (Aliyun OSS L2 Adapter)
+#
+# 将此文件复制到 github.com/ZoneCNH/ossx/.github/workflows/ci.yml
+# 并根据实际 Aliyun OSS endpoint 和 credential 配置调整。
+#
+# 当前状态: EXT_CI=❌ (待部署)
+# 模板来源: ZoneCNH/ZoneCNH module/ossx/ci-workflow.yaml (Trust Alignment 2026-06-14)
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@f111f3307d8850f501ac008e886eec1fd1932a34 # v5.3.0
+        with:
+          go-version: "1.23"
+      - name: Unit Test
+        run: go test ./... -race -count=1 -short
+      - name: Vet
+        run: go vet ./...
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-go@f111f3307d8850f501ac008e886eec1fd1932a34
+        with:
+          go-version: "1.23"
+      - name: Lint
+        uses: golangci/golangci-lint-action@v6
+
+  # 需要 Aliyun OSS credentials (OSS_ENDPOINT, OSS_ACCESS_KEY_ID, OSS_ACCESS_KEY_SECRET)
+  # 在 GitHub Secrets 中配置后启用此 job
+  integration:
+    if: false  # 启用条件: 配置 OSS_* secrets 后改为 true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-go@f111f3307d8850f501ac008e886eec1fd1932a34
+        with:
+          go-version: "1.23"
+      - name: Integration Test
+        env:
+          OSS_ENDPOINT: ${{ secrets.OSS_ENDPOINT }}
+          OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
+          OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+        run: go test ./... -run Integration -count=1 -v
+
+  trust-alignment:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-go@f111f3307d8850f501ac008e886eec1fd1932a34
+        with:
+          go-version: "1.23"
+      - name: Install xlibgate
+        run: go install github.com/ZoneCNH/xlibgate/cmd/xlibgate@v1.0.0
+      - name: Trust Alignment
+        run: |
+          GOWORK=off xlibgate trust identity --repo .
+          GOWORK=off xlibgate trust template-residue --repo .
+          GOWORK=off xlibgate trust release-consistency --offline --repo .
+          GOWORK=off xlibgate trust secret-redaction --repo . --path release/evidence
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
