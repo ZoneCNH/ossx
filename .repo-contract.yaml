@@ -1,0 +1,16 @@
+schema_version: repo-contract/v1
+repo:
+  name: ossx
+  owner: ZoneCNH
+  url: https://github.com/ZoneCNH/ossx
+  module: github.com/ZoneCNH/ossx
+identity:
+  layer: L1
+  public_package: github.com/ZoneCNH/ossx/pkg/ossx
+  standard_source: github.com/ZoneCNH/xlib-standard
+  is_standard_source: false
+  is_generator: false
+versions:
+  table_version: v1.0.1
+  latest_git_tag: v1.0.1
+  all_aligned: true
