@@ -74,6 +74,7 @@ type ObjectInfo struct {
 	ETag         string
 	StorageClass string
 	Version      string
+	Location     string // object URL (multipart complete result)
 	CreatedAt    time.Time
 	ModifiedAt   time.Time
 }

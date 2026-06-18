@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -198,17 +199,28 @@ func TestCopy(t *testing.T) {
 	}
 }
 
-// TC-006: Multipart returns ErrNotImplemented in v1.0.2-alpha.
+// TC-006: Multipart full lifecycle (v1.1.0 — was stub in v1.0.2-alpha).
 func TestMultipartNotImplemented(t *testing.T) {
 	ctx := context.Background()
 	bs := mustStore(t)
-	sess := bs.Multipart(ctx)
-	if _, err := sess.Initiate(ctx, Key("k"), PutOptions{}); !errors.Is(err, ErrNotImplemented) {
-		t.Fatalf("want ErrNotImplemented, got %v", err)
+	sess, err := bs.Multipart(ctx)
+	if err != nil {
+		t.Fatalf("Multipart: %v", err)
+	}
+	id, err := sess.Initiate(ctx, Key("mp/k"), PutOptions{ContentType: "text/plain"})
+	if err != nil {
+		t.Fatalf("Initiate: %v", err)
+	}
+	part, err := sess.UploadPart(ctx, id, 1, strings.NewReader("hello"), 5)
+	if err != nil {
+		t.Fatalf("UploadPart: %v", err)
+	}
+	if _, err := sess.Complete(ctx, id, []PartETag{part}); err != nil {
+		t.Fatalf("Complete: %v", err)
 	}
 }
 
-// TC-007: Presign enforces TTL + allowlist.
+// TC-007: Presign enforces TTL + allowlist (v1.1.0 — signing now real).
 func TestPresign(t *testing.T) {
 	ctx := context.Background()
 	cfg := validConfig()
@@ -220,14 +232,21 @@ func TestPresign(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := bs.Presign(ctx, Key("k"), PresignPut, PresignOptions{TTL: 60}); !errors.Is(err, ErrPermission) {
-		t.Fatalf("want ErrPermission for PUT, got %v", err)
+	// PUT not in allowlist → auth error.
+	if _, err := bs.Presign(ctx, Key("k"), PresignPut, PresignOptions{TTL: 60}); errorKind(err) != ErrorKindAuth {
+		t.Fatalf("want ErrorKindAuth for PUT, got %v", err)
 	}
-	if _, err := bs.Presign(ctx, Key("k"), PresignGet, PresignOptions{TTL: 60}); !errors.Is(err, ErrNotImplemented) {
-		t.Fatalf("want ErrNotImplemented for GET signing, got %v", err)
+	// GET within TTL + allowlist → success.
+	url, err := bs.Presign(ctx, Key("k"), PresignGet, PresignOptions{TTL: 60})
+	if err != nil {
+		t.Fatalf("GET presign: %v", err)
 	}
-	if _, err := bs.Presign(ctx, Key("k"), PresignGet, PresignOptions{TTL: 9999}); !errors.Is(err, ErrInvalidConfig) {
-		t.Fatalf("want ErrInvalidConfig for over-TTL, got %v", err)
+	if url.URL == "" || url.Method != "GET" {
+		t.Fatalf("bad presign url: %+v", url)
+	}
+	// Over-TTL → validation error.
+	if _, err := bs.Presign(ctx, Key("k"), PresignGet, PresignOptions{TTL: 9999}); errorKind(err) != ErrorKindValidation {
+		t.Fatalf("want ErrorKindValidation for over-TTL, got %v", err)
 	}
 }
 
@@ -251,21 +270,19 @@ func TestHealthAndClose(t *testing.T) {
 }
 
 // TC-009: SPI does not leak SDK types — public API uses only stdlib + ossx types.
+// The public BlobStore interface is implemented; the SPI (StoreAdapter) is
+// exported so external adapters can implement it explicitly.
 func TestSPISurface(t *testing.T) {
 	var _ BlobStore = (*blobStore)(nil)
-	var _ ObjectStorageAdapter = (*InMemoryAdapter)(nil)
+	var _ StoreAdapter = (*InMemoryAdapter)(nil)
 }
 
 // TC-011: Hooks emit non-nil and survive nil callbacks.
 func TestHooks(t *testing.T) {
 	ctx := context.Background()
-	calls := 0
+	mm := newMemoryMetrics()
 	cfg := validConfig()
-	bs, err := NewBlobStore(cfg, NewInMemoryAdapter(), Hooks{
-		OnOperation: func(name string, key Key, lat int64, sz int64, class string) {
-			calls++
-		},
-	})
+	bs, err := NewBlobStore(cfg, NewInMemoryAdapter(), Hooks{Metrics: mm})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,10 +290,38 @@ func TestHooks(t *testing.T) {
 	if _, err := bs.Put(ctx, k, strings.NewReader("data"), PutOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if calls == 0 {
+	if len(mm.counters) == 0 {
 		t.Fatalf("expected hook to fire")
 	}
 }
+
+// memoryMetrics is a test Metrics implementation that records counters.
+type memoryMetrics struct {
+	mu       sync.Mutex
+	counters map[string]float64
+	histos   map[string][]float64
+}
+
+func newMemoryMetrics() *memoryMetrics {
+	return &memoryMetrics{counters: map[string]float64{}, histos: map[string][]float64{}}
+}
+
+func (m *memoryMetrics) IncCounter(name string, _ map[string]string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.counters[name]++
+}
+func (m *memoryMetrics) AddCounter(name string, delta float64, _ map[string]string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.counters[name] += delta
+}
+func (m *memoryMetrics) ObserveHistogram(name string, value float64, _ map[string]string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.histos[name] = append(m.histos[name], value)
+}
+func (m *memoryMetrics) SetGauge(string, float64, map[string]string) {}
 
 // helpers
 func validConfig() Config {

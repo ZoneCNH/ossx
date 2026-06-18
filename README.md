@@ -1,69 +1,112 @@
 # ossx
 
-ZoneCNH `ossx` — Object Storage Extension for FoundationX.
+ZoneCNH `ossx` — Aliyun OSS adapter for FoundationX. A stable BlobStore API
+over Aliyun OSS with streaming semantics, multipart lifecycle, presigned URL
+policy, lifecycle/retention/permission validation, retry/circuit resilience,
+and observex-compatible observability hooks.
 
-## 状态：v1.0.2-alpha
+> Identity (v1.1.0): Aliyun OSS single-provider adapter (NOT a generic
+> S3-compatible / multi-provider abstraction). See module/ossx/SPEC.md §1.
 
-- ✅ 公开 API 全签名落地：`BlobStore` 接口（Put/Get/Delete/Copy/Head/Exists/List/Multipart/Presign/Health/Close）
-- ✅ 完整类型体系：`Config` / `Key` / `Prefix` / `ObjectInfo` / `PutOptions` / 全 12 个 typed errors
-- ✅ `InMemoryAdapter` 全功能内存实现，可直接用于测试与 v1.0.2 stub 集成
-- ✅ `ObjectStorageAdapter` SPI（FR-008）：公开接口仅依赖 stdlib + ossx 类型
-- ✅ `Hooks` 可观测性钩子（FR-009）：no-op 默认安全
-- ✅ 入口校验：Config / Key / Metadata / Checksum 算法 / Presign TTL & 操作 allowlist
-- ✅ `go build ./pkg/...` + `go vet` + `go test -race -count=1` 全过
+## 状态：v1.1.0
 
-### v1.0.2-alpha 明确不做（v1.1.0 准入）
-
-- ❌ Multipart：`Multipart()` 返回的 session 全部方法 `ErrNotImplemented`
-- ❌ Presign 实际签名：TTL/allowlist 校验已实现，签名 SDK 适配返回 `ErrNotImplemented`
-- ❌ `adapters/s3`、`adapters/aliyun`：v1.1.0 接入
+- ✅ 真实 Aliyun OSS adapter（`adapters/aliyun/`，SDK 隔离，FR-008）
+- ✅ 流式 Put/Get（`io.Reader`/`io.ReadCloser`，不缓冲整对象，FR-004）
+- ✅ 完整 Multipart 生命周期（Initiate/UploadPart/ListParts/Complete/Abort + 幂等，FR-005）
+- ✅ 真实 Presign（`bucket.SignURL`，TTL ≤15min + allowlist + 审计脱敏，FR-006）
+- ✅ Lifecycle/Retention/Permission 策略校验（FR-007）
+- ✅ Retry + Circuit Breaker（resiliencx 语义，FR-003/005）
+- ✅ observex 兼容 Hooks（Metrics/Tracer/Logger，nil-safe，FR-009）
+- ✅ 三态 Health（config/unreachable/degraded，FR-010）
+- ✅ 24 单元测试 + 5 集成测试（真实 bucket `x-go`，TC-010）
 
 ## 安装
 
 ```go
-import "github.com/ZoneCNH/ossx/pkg/ossx"
+import (
+    "github.com/ZoneCNH/ossx/pkg/ossx"
+    "github.com/ZoneCNH/ossx/adapters/aliyun"
+)
 ```
 
-## 快速使用（in-memory）
+```bash
+go get github.com/ZoneCNH/ossx@v1.1.0
+```
+
+## 快速使用（Aliyun OSS）
+
+配置从 `FOUNDATIONX_OSSX_*` 环境变量加载（组合根装配，ossx 不 import configx）：
 
 ```go
-cfg := ossx.Config{
-    Endpoint:  "https://internal.example",
-    Region:    "cn-hangzhou",
-    Bucket:    "my-bucket",
-    Timeouts:  ossx.Timeouts{Operation: 30 * time.Second},
-    Multipart: ossx.MultipartPolicy{MinPartSize: 8 << 20, MaxParts: 10000},
-    Presign:   ossx.PresignPolicy{MaxTTL: 5 * time.Minute, AllowedOperations: []ossx.PresignOperation{ossx.PresignGet}},
-}
+ctx := context.Background()
 
-bs, err := ossx.NewBlobStore(cfg, ossx.NewInMemoryAdapter(), ossx.Hooks{})
-if err != nil { /* handle */ }
-defer bs.Close(ctx)
+// 1. Load config (composition root reads secrets; ossx never imports configx).
+cfg, err := ossx.ConfigFromEnv()
+if err != nil { return err }
 
+// 2. Build the real Aliyun adapter (SDK isolated here, never leaks).
+adapter, err := aliyun.NewAdapter(ctx, cfg)
+if err != nil { return err }
+
+// 3. Wrap with BlobStore (adds retry/circuit/policy/hooks).
+store, err := ossx.NewBlobStore(cfg, adapter, ossx.Hooks{})
+if err != nil { return err }
+defer store.Close(ctx)
+
+// 4. Streaming Put (no whole-object buffering).
 key, _ := ossx.NewKey("artifacts/build-001.tgz")
-info, err := bs.Put(ctx, key, body, ossx.PutOptions{
+info, err := store.Put(ctx, key, body, ossx.PutOptions{
     ContentType:  "application/gzip",
     ChecksumAlgo: ossx.ChecksumSHA256,
 })
+
+// 5. Streaming Get (caller must Close).
+reader, err := store.Get(ctx, key, ossx.GetOptions{VerifyChecksum: true})
+defer reader.Close()
 ```
 
-## 实现自定义 adapter
-
-实现 `ObjectStorageAdapter` 接口（5 个方法 + Name + CloseAdapter）：
+## 快速使用（in-memory，测试/示例）
 
 ```go
-type ObjectStorageAdapter interface {
-    PutObject(ctx context.Context, key string, body []byte, contentType string, metadata map[string]string) (string, error)
-    GetObject(ctx context.Context, key string) ([]byte, ObjectInfo, error)
-    DeleteObject(ctx context.Context, key string) error
-    HeadObject(ctx context.Context, key string) (ObjectInfo, error)
-    ListObjects(ctx context.Context, prefix string, max int, token string) ([]ObjectInfo, string, error)
-    CloseAdapter(ctx context.Context) error
+store, _ := ossx.NewBlobStore(cfg, ossx.NewInMemoryAdapter(), ossx.Hooks{})
+// 无需 Aliyun SDK 或真实 bucket。
+```
+
+## Adapter SPI
+
+外部 adapter 实现 `ossx.StoreAdapter`（流式签名）：
+
+```go
+type StoreAdapter interface {
     Name() string
+    PutObject(ctx, key string, body io.Reader, size int64, opts PutAdapterOptions) (ObjectInfo, error)
+    GetObject(ctx, key string) (io.ReadCloser, ObjectInfo, error)
+    HeadObject(ctx, key string) (ObjectInfo, error)
+    DeleteObject(ctx, key string, strict bool) error
+    CopyObject(ctx, source, target string, opts CopyAdapterOptions) (ObjectInfo, error)
+    ListObjects(ctx, prefix string, max int, continuation string) (ListPage, error)
+    InitiateMultipart(ctx, key string, opts PutAdapterOptions) (UploadID, error)
+    UploadPart(ctx, id UploadID, partNumber int, body io.Reader, size int64) (PartETag, error)
+    ListParts(ctx, id UploadID) ([]PartETag, error)
+    CompleteMultipart(ctx, id UploadID, parts []PartETag) (ObjectInfo, error)
+    AbortMultipart(ctx, id UploadID) error
+    PresignURL(ctx, key string, op PresignOperation, ttl int64, opts PresignAdapterOptions) (PresignedURL, error)
+    Health(ctx) error
+    Close(ctx) error
 }
 ```
 
 Provider SDK 类型必须封装在 adapter 内部（FR-008 / BR-011）。
+
+## 集成测试
+
+集成测试连真实 Aliyun OSS bucket（双层门禁，镜像 taosx）：
+
+```bash
+# 加载 sre/secrets/env/ossx.env（gitignored，不进公开仓库）
+set -a; . /home/ZoneCNH/sre/secrets/env/ossx.env; set +a
+OSSX_LIVE_INTEGRATION=1 go test -tags integration ./adapters/aliyun/ -v -timeout 120s
+```
 
 ## 与 SPEC 的对应
 
@@ -74,11 +117,11 @@ Provider SDK 类型必须封装在 adapter 内部（FR-008 / BR-011）。
 | FR-001 构造与配置校验 | ✅ |
 | FR-002 Key/metadata 校验 | ✅ |
 | FR-003 Put/Get/Delete/Copy/Head/Exists/List | ✅ |
-| FR-004 流式上传/下载 | ✅（基础路径；超大对象分片由 multipart 兑现） |
-| FR-005 Multipart | ⚠️ ErrNotImplemented（v1.1.0） |
-| FR-006 Presign | ⚠️ TTL/allowlist 已校验，签名 v1.1.0 |
-| FR-007 Checksum/Lifecycle/Permission policy | ✅ checksum；其余 v1.1.0 |
-| FR-008 Adapter SPI | ✅ |
+| FR-004 流式上传/下载 | ✅ |
+| FR-005 Multipart | ✅ |
+| FR-006 Presign | ✅ |
+| FR-007 Checksum/Lifecycle/Retention/Permission policy | ✅ |
+| FR-008 Aliyun OSS adapter 隔离 | ✅ |
 | FR-009 Hooks（observability） | ✅ |
 | FR-010 Health & graceful close | ✅ |
 
