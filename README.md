@@ -5,10 +5,10 @@ over Aliyun OSS with streaming semantics, multipart lifecycle, presigned URL
 policy, lifecycle/retention/permission validation, retry/circuit resilience,
 and observex-compatible observability hooks.
 
-> Identity (v1.2.0): Aliyun OSS single-provider adapter (NOT a generic
+> Identity (v1.2.1): Aliyun OSS single-provider adapter (NOT a generic
 > S3-compatible / multi-provider abstraction). See module/ossx/SPEC.md §1.
 
-## 状态：v1.2.0
+## 状态：本地生产候选（v1.2.1 线）
 
 - ✅ 真实 Aliyun OSS adapter（`adapters/aliyun/`，SDK 隔离，FR-008）
 - ✅ 流式 Put/Get（`io.Reader`/`io.ReadCloser`，不缓冲整对象，FR-004）
@@ -18,7 +18,9 @@ and observex-compatible observability hooks.
 - ✅ Retry + Circuit Breaker（resiliencx 语义，FR-003/005）
 - ✅ observex 兼容 Hooks（Metrics/Tracer/Logger，nil-safe，FR-009）
 - ✅ 三态 Health（config/unreachable/degraded，FR-010）
-- ✅ 本地验收通过：pkg/ossx 覆盖率 **100.0%**；实盘 Aliyun integration 5/5 PASS（真实 bucket `x-go`：Health/PutGetDelete/List/Multipart/Presign）
+- ✅ 本地验收通过：`go test -race ./...`、`go vet ./...`、`go build ./...`、`golangci-lint run ./...`、`pkg/ossx` 覆盖率 **100.0%**
+- ✅ dev.md 凭据驱动的真实 Aliyun integration 本地通过（凭据值未输出）
+- ⏳ 生产放行待归档：release-tag CI、Gitleaks/xlibgate artifact、集成测试 CI artifact、下游接入/soak evidence
 
 ## 安装
 
@@ -30,7 +32,7 @@ import (
 ```
 
 ```bash
-go get github.com/ZoneCNH/ossx@v1.2.0
+go get github.com/ZoneCNH/ossx@v1.2.1
 ```
 
 ## 快速使用（Aliyun OSS）
@@ -74,7 +76,7 @@ store, _ := ossx.NewBlobStore(cfg, ossx.NewInMemoryAdapter(), ossx.Hooks{})
 
 ## Adapter SPI
 
-外部 adapter 实现 `ossx.StoreAdapter`（流式签名）：
+外部 adapter 实现拆分后的能力接口（每个公共接口 ≤7 methods）：
 
 ```go
 type StoreAdapter interface {
@@ -85,28 +87,44 @@ type StoreAdapter interface {
     DeleteObject(ctx, key string, strict bool) error
     CopyObject(ctx, source, target string, opts CopyAdapterOptions) (ObjectInfo, error)
     ListObjects(ctx, prefix string, max int, continuation string) (ListPage, error)
+}
+
+type MultipartAdapter interface {
     InitiateMultipart(ctx, key string, opts PutAdapterOptions) (UploadID, error)
     UploadPart(ctx, id UploadID, partNumber int, body io.Reader, size int64) (PartETag, error)
     ListParts(ctx, id UploadID) ([]PartETag, error)
     CompleteMultipart(ctx, id UploadID, parts []PartETag) (ObjectInfo, error)
     AbortMultipart(ctx, id UploadID) error
+}
+
+type PresignAdapter interface {
     PresignURL(ctx, key string, op PresignOperation, ttl int64, opts PresignAdapterOptions) (PresignedURL, error)
-    Health(ctx) error
-    Close(ctx) error
+}
+
+type AdapterLifecycle interface {
+    Health(ctx context.Context) error
+    Close(ctx context.Context) error
 }
 ```
 
 Provider SDK 类型必须封装在 adapter 内部（FR-008 / BR-011）。
 
+## 生产级放行状态
+
+当前仓库达到**本地生产候选**，不等同完整生产放行。剩余硬门槛：
+
+- 归档 release-tag CI + Gitleaks + xlibgate + 集成测试 CI artifact。
+- 归档下游接入和 production soak evidence。
+
 ## 集成测试
 
 集成测试采用 build tag + 环境变量双层门禁。未设置 `OSSX_LIVE_INTEGRATION=1`
-或凭证时，本地验收按设计 SKIP；真实 Aliyun OSS pass 需在凭证环境执行并归档
-evidence。
+或凭证时，本地验收按设计 SKIP。2026-06-19 已使用
+`/home/ZoneCNH/sre/secrets/env/dev.md` 在本地执行真实 Aliyun OSS integration 并通过；
+完整生产放行仍需要 release-tag CI artifact 归档。
 
 ```bash
-# 加载 sre/secrets/env/ossx.env（gitignored，不进公开仓库）
-set -a; . /home/ZoneCNH/sre/secrets/env/ossx.env; set +a
+# 从 /home/ZoneCNH/sre/secrets/env/dev.md 注入 OSSX/Aliyun 相关环境变量（不要输出密钥值）
 OSSX_LIVE_INTEGRATION=1 go test -tags integration ./adapters/aliyun/ -v -timeout 120s
 ```
 

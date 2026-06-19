@@ -1,22 +1,29 @@
 {
   "schema_version": "ossx.release-manifest.v1",
   "repository": "github.com/ZoneCNH/ossx",
-  "version": "v1.2.0",
+  "version": "v1.2.1",
   "date": "2026-06-19",
-  "status": "local-acceptance",
-  "evidence": [
-    "GOWORK=off go test ./... -race -count=1",
-    "GOWORK=off go test ./pkg/ossx -count=1 -covermode=atomic -coverprofile=pkg-ossx.coverage.out (100.0% statements)",
+  "status": "local-production-candidate",
+  "local_evidence": [
+    "GOWORK=off go test -race ./... -count=1",
+    "GOWORK=off go test ./pkg/ossx -count=1 -covermode=atomic -coverprofile=/tmp/ossx-pkg.cover (100.0% statements)",
+    "GOWORK=off go test ./pkg/ossx -run 'TestPublicInterfacesStayWithinGovernanceLimit|TestNewBlobStoreRejectsMissingAdapterCapabilities|TestSPISurface' -count=1",
+    "dev.md-backed OSSX_LIVE_INTEGRATION=1 GOWORK=off go test -tags integration ./adapters/aliyun -count=1 -timeout 180s",
+    "golangci-lint run ./...",
     "GOWORK=off go vet ./...",
     "GOWORK=off go build ./...",
-    "OSSX_LIVE_INTEGRATION=1 go test -tags integration ./adapters/aliyun/ -timeout 180s (5/5 PASS against bucket x-go: Health/PutGetDelete/List/Multipart/Presign)"
+    "scripts/secret-scope-check.sh",
+    "git diff --check"
   ],
-  "credential_gated": [
-    "Aliyun OSS live integration (verified locally 2026-06-19; external CI artifact pending)"
+  "ci_release_gates": [
+    "release tag CI requires Aliyun OSS live integration secrets and fails if missing",
+    "secret-scan job runs repository secret-scope check and Gitleaks",
+    "boundary job runs xlibgate trust gates",
+    "release-preflight reruns race tests, pkg/ossx coverage, vet, build, integration, and secret-scope check"
   ],
-  "pending_public_evidence": [
-    "external CI artifact",
-    "downstream adoption",
-    "production soak"
+  "production_blockers": [
+    "external CI artifact is not archived in this workspace",
+    "release-tag Aliyun OSS integration artifact is not archived in this workspace",
+    "downstream adoption and production soak evidence are not archived"
   ]
 }

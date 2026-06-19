@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.2.1 — 2026-06-19
+
+### Changed — API governance split + local production candidate boundary
+- Split public caller-facing capabilities: `BlobStore` covers Put/Get/Delete/Copy/Head/Exists/List, while `MultipartStarter`, `Presigner`, `HealthChecker`, and `StoreCloser` expose optional capabilities. `NewBlobStore` returns `*Store`, which implements all split capabilities.
+- Split adapter SPI into `StoreAdapter`, `MultipartAdapter`, `PresignAdapter`, and `AdapterLifecycle`; each public interface stays within the 7-method governance limit.
+- Strict delete now preflights missing objects before provider delete on both `Store.Delete` and Aliyun adapter paths.
+- Aliyun adapter close state now uses atomic state for race-safe lifecycle checks.
+- Secret-scope and CI release-preflight checks were hardened.
+
+### Tests
+- Added interface-size regression coverage for public APIs and split adapter capability guards.
+- Added strict delete coverage and Aliyun adapter close race coverage.
+- Re-verified local gates: race, `pkg/ossx` 100.0% coverage, vet, build, lint, secret-scope scan, dependency isolation, and dev.md-backed live Aliyun integration.
+
+### Notes
+- `factory=false` remains until release-tag CI, Gitleaks/xlibgate, release integration artifact, downstream adoption, and production-soak evidence are archived.
+- This is a local production candidate checkpoint, not a production release.
+
 ## v1.2.0 — 2026-06-19
 
 ### Added — Release-grade test hardening + CI/CD pipeline + live integration evidence

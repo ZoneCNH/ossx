@@ -216,6 +216,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Secret scope check
+        run: scripts/secret-scope-check.sh
       - name: Gitleaks
         uses: gitleaks/gitleaks-action@v2
 
@@ -293,6 +295,7 @@ jobs:
           test -f release/manifest/latest.json
       - name: Re-run release checks
         run: |
+          scripts/secret-scope-check.sh
           GOWORK=off go test ./... -race -count=1
           GOWORK=off go test ./pkg/ossx -count=1 -covermode=atomic -coverprofile=pkg-ossx.coverage.out
           total="$(go tool cover -func=pkg-ossx.coverage.out | awk '/^total:/ {print $3}')"
@@ -300,6 +303,8 @@ jobs:
             echo "::error::pkg/ossx statement coverage must be 100.0%, got ${total:-unknown}"
             exit 1
           fi
+          GOWORK=off go vet ./...
+          GOWORK=off go build ./...
           GOWORK=off go list ./... >/tmp/packages.txt
 
   release-publish:

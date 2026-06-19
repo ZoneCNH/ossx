@@ -25,33 +25,53 @@ type BlobStore interface {
 	Exists(ctx context.Context, key Key) (bool, error)
 	// List returns a bounded page matching prefix (FR-003 / BR-006).
 	List(ctx context.Context, prefix Prefix, opts ListOptions) (ListPage, error)
+}
+
+// MultipartStarter exposes multipart upload sessions for callers that need
+// FR-005 without widening the core BlobStore surface.
+type MultipartStarter interface {
 	// Multipart starts a multipart upload session (FR-005).
 	Multipart(ctx context.Context) (MultipartSession, error)
+}
+
+// Presigner exposes presigned URL creation for callers that need FR-006.
+type Presigner interface {
 	// Presign generates a signed URL for op with ttl-second expiry (FR-006).
 	Presign(ctx context.Context, key Key, op PresignOperation, opts PresignOptions) (PresignedURL, error)
+}
+
+// HealthChecker exposes readiness checks for callers that need FR-010.
+type HealthChecker interface {
 	// Health reports readiness, distinguishing config / unreachable / degraded (FR-010).
 	Health(ctx context.Context) HealthReport
+}
+
+// StoreCloser exposes resource shutdown for callers that own a store instance.
+type StoreCloser interface {
 	// Close releases resources; idempotent (FR-010).
 	Close(ctx context.Context) error
 }
 
-// blobStore is the concrete implementation backed by a StoreAdapter.
-type blobStore struct {
-	cfg      Config
-	adapter  StoreAdapter
-	hooks    Hooks
-	retry    retryPolicy
-	breakers map[string]*circuitBreaker // per-operation breakers
-	bMu      sync.Mutex
-	mu       sync.RWMutex
-	closed   bool
+// Store is the concrete implementation backed by split adapter capabilities.
+type Store struct {
+	cfg       Config
+	adapter   StoreAdapter
+	multipart MultipartAdapter
+	presigner PresignAdapter
+	lifecycle AdapterLifecycle
+	hooks     Hooks
+	retry     retryPolicy
+	breakers  map[string]*circuitBreaker // per-operation breakers
+	bMu       sync.Mutex
+	mu        sync.RWMutex
+	closed    bool
 }
 
-// NewBlobStore constructs a BlobStore per FR-001.
+// NewBlobStore constructs a Store per FR-001.
 //
 // adapter MUST NOT be nil (for tests use NewInMemoryAdapter). hooks may be
 // zero-value (no-op). Config is validated and filled with defaults.
-func NewBlobStore(cfg Config, adapter StoreAdapter, hooks Hooks) (BlobStore, error) {
+func NewBlobStore(cfg Config, adapter StoreAdapter, hooks Hooks) (*Store, error) {
 	cfg = cfg.withDefaults()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -59,17 +79,32 @@ func NewBlobStore(cfg Config, adapter StoreAdapter, hooks Hooks) (BlobStore, err
 	if adapter == nil {
 		return nil, newError(ErrorKindConfig, "NewBlobStore", "adapter is nil")
 	}
-	return &blobStore{
-		cfg:      cfg,
-		adapter:  adapter,
-		hooks:    hooks.withDefaults(),
-		retry:    retryPolicyFromConfig(cfg.Retry),
-		breakers: map[string]*circuitBreaker{},
+	multipart, ok := adapter.(MultipartAdapter)
+	if !ok {
+		return nil, newError(ErrorKindConfig, "NewBlobStore", "adapter missing multipart capability")
+	}
+	presigner, ok := adapter.(PresignAdapter)
+	if !ok {
+		return nil, newError(ErrorKindConfig, "NewBlobStore", "adapter missing presign capability")
+	}
+	lifecycle, ok := adapter.(AdapterLifecycle)
+	if !ok {
+		return nil, newError(ErrorKindConfig, "NewBlobStore", "adapter missing lifecycle capability")
+	}
+	return &Store{
+		cfg:       cfg,
+		adapter:   adapter,
+		multipart: multipart,
+		presigner: presigner,
+		lifecycle: lifecycle,
+		hooks:     hooks.withDefaults(),
+		retry:     retryPolicyFromConfig(cfg.Retry),
+		breakers:  map[string]*circuitBreaker{},
 	}, nil
 }
 
 // breakerFor returns (creating if needed) the breaker for an operation.
-func (b *blobStore) breakerFor(op string) *circuitBreaker {
+func (b *Store) breakerFor(op string) *circuitBreaker {
 	b.bMu.Lock()
 	defer b.bMu.Unlock()
 	cb, ok := b.breakers[op]
@@ -81,7 +116,7 @@ func (b *blobStore) breakerFor(op string) *circuitBreaker {
 }
 
 // run executes op through retry + circuit breaker, then emits metrics.
-func (b *blobStore) run(ctx context.Context, op string, key Key, fn func(context.Context) error) (time.Duration, error) {
+func (b *Store) run(ctx context.Context, op string, key Key, fn func(context.Context) error) (time.Duration, error) {
 	start := time.Now()
 	cb := b.breakerFor(op)
 	err := cb.do(ctx, op, b.retry, fn)
@@ -94,7 +129,7 @@ func (b *blobStore) run(ctx context.Context, op string, key Key, fn func(context
 	return latency, err
 }
 
-func (b *blobStore) checkClosed() error {
+func (b *Store) checkClosed() error {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	if b.closed {
@@ -105,7 +140,7 @@ func (b *blobStore) checkClosed() error {
 
 // Put streams body to key (FR-003 / FR-004). The adapter receives the raw
 // io.Reader; ossx does NOT buffer the whole object.
-func (b *blobStore) Put(ctx context.Context, key Key, body io.Reader, opts PutOptions) (ObjectInfo, error) {
+func (b *Store) Put(ctx context.Context, key Key, body io.Reader, opts PutOptions) (ObjectInfo, error) {
 	if err := b.checkClosed(); err != nil {
 		return ObjectInfo{}, err
 	}
@@ -147,7 +182,7 @@ func (b *blobStore) Put(ctx context.Context, key Key, body io.Reader, opts PutOp
 }
 
 // Get returns a streaming reader (FR-004). The caller MUST Close it.
-func (b *blobStore) Get(ctx context.Context, key Key, opts GetOptions) (*ObjectReader, error) {
+func (b *Store) Get(ctx context.Context, key Key, opts GetOptions) (*ObjectReader, error) {
 	if err := b.checkClosed(); err != nil {
 		return nil, err
 	}
@@ -178,7 +213,7 @@ func (b *blobStore) Get(ctx context.Context, key Key, opts GetOptions) (*ObjectR
 }
 
 // Delete removes key (FR-003). Idempotent for missing objects unless strict.
-func (b *blobStore) Delete(ctx context.Context, key Key, opts DeleteOptions) error {
+func (b *Store) Delete(ctx context.Context, key Key, opts DeleteOptions) error {
 	if err := b.checkClosed(); err != nil {
 		return err
 	}
@@ -188,9 +223,20 @@ func (b *blobStore) Delete(ctx context.Context, key Key, opts DeleteOptions) err
 	if _, err := NewKey(string(key)); err != nil {
 		return err
 	}
-	// FR-007: retention policy gate (need object metadata for age check).
-	if b.cfg.Policy.Retention.Mode != RetentionModeNone && b.cfg.Policy.Retention.Mode != "" {
-		if info, herr := b.adapter.HeadObject(ctx, string(key)); herr == nil {
+	retentionEnabled := b.cfg.Policy.Retention.Mode != RetentionModeNone && b.cfg.Policy.Retention.Mode != ""
+	if opts.StrictNotFound || retentionEnabled {
+		var info ObjectInfo
+		_, herr := b.run(ctx, "head", key, func(ctx context.Context) error {
+			var err error
+			info, err = b.adapter.HeadObject(ctx, string(key))
+			return err
+		})
+		if herr != nil {
+			if opts.StrictNotFound {
+				return herr
+			}
+		} else if retentionEnabled {
+			// FR-007: retention policy gate (need object metadata for age check).
 			if err := validateRetentionDelete(b.cfg.Policy.Retention, info, time.Now()); err != nil {
 				return err
 			}
@@ -210,7 +256,7 @@ func (b *blobStore) Delete(ctx context.Context, key Key, opts DeleteOptions) err
 }
 
 // Copy duplicates source to target (FR-003). Server-side when the adapter supports it.
-func (b *blobStore) Copy(ctx context.Context, source Key, target Key, opts CopyOptions) (ObjectInfo, error) {
+func (b *Store) Copy(ctx context.Context, source Key, target Key, opts CopyOptions) (ObjectInfo, error) {
 	if err := b.checkClosed(); err != nil {
 		return ObjectInfo{}, err
 	}
@@ -240,7 +286,7 @@ func (b *blobStore) Copy(ctx context.Context, source Key, target Key, opts CopyO
 }
 
 // Head returns metadata without downloading the body (FR-003).
-func (b *blobStore) Head(ctx context.Context, key Key) (ObjectInfo, error) {
+func (b *Store) Head(ctx context.Context, key Key) (ObjectInfo, error) {
 	if err := b.checkClosed(); err != nil {
 		return ObjectInfo{}, err
 	}
@@ -263,7 +309,7 @@ func (b *blobStore) Head(ctx context.Context, key Key) (ObjectInfo, error) {
 }
 
 // Exists reports whether key is present (FR-003).
-func (b *blobStore) Exists(ctx context.Context, key Key) (bool, error) {
+func (b *Store) Exists(ctx context.Context, key Key) (bool, error) {
 	_, err := b.Head(ctx, key)
 	if err == nil {
 		return true, nil
@@ -276,7 +322,7 @@ func (b *blobStore) Exists(ctx context.Context, key Key) (bool, error) {
 }
 
 // List returns a bounded page matching prefix (FR-003 / BR-006).
-func (b *blobStore) List(ctx context.Context, prefix Prefix, opts ListOptions) (ListPage, error) {
+func (b *Store) List(ctx context.Context, prefix Prefix, opts ListOptions) (ListPage, error) {
 	if err := b.checkClosed(); err != nil {
 		return ListPage{}, err
 	}
@@ -300,7 +346,7 @@ func (b *blobStore) List(ctx context.Context, prefix Prefix, opts ListOptions) (
 }
 
 // Multipart starts a multipart upload session (FR-005).
-func (b *blobStore) Multipart(ctx context.Context) (MultipartSession, error) {
+func (b *Store) Multipart(ctx context.Context) (MultipartSession, error) {
 	if err := b.checkClosed(); err != nil {
 		return nil, err
 	}
@@ -311,12 +357,12 @@ func (b *blobStore) Multipart(ctx context.Context) (MultipartSession, error) {
 }
 
 // Health reports readiness, distinguishing config / unreachable / degraded (FR-010).
-func (b *blobStore) Health(ctx context.Context) HealthReport {
+func (b *Store) Health(ctx context.Context) HealthReport {
 	now := time.Now()
 	if err := b.checkClosed(); err != nil {
 		return HealthReport{Ready: false, ProviderStatus: "closed", Error: "blobstore closed", LastCheckedAt: now.Unix()}
 	}
-	herr := b.adapter.Health(ctx)
+	herr := b.lifecycle.Health(ctx)
 	if herr == nil {
 		return HealthReport{Ready: true, ProviderStatus: b.adapter.Name(), LastCheckedAt: now.Unix()}
 	}
@@ -334,7 +380,7 @@ func (b *blobStore) Health(ctx context.Context) HealthReport {
 }
 
 // Close releases resources; idempotent (FR-010).
-func (b *blobStore) Close(ctx context.Context) error {
+func (b *Store) Close(ctx context.Context) error {
 	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()
@@ -342,7 +388,7 @@ func (b *blobStore) Close(ctx context.Context) error {
 	}
 	b.closed = true
 	b.mu.Unlock()
-	return b.adapter.Close(ctx)
+	return b.lifecycle.Close(ctx)
 }
 
 // --- helpers (kept here for visibility; some exported for adapters) ---

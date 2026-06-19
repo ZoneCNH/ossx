@@ -26,7 +26,7 @@ func validConfigWith(t *testing.T, muts ...func(*Config)) Config {
 	return c
 }
 
-func mustStoreConfig(t *testing.T, cfg Config) BlobStore {
+func mustStoreConfig(t *testing.T, cfg Config) *Store {
 	t.Helper()
 	bs, err := NewBlobStore(cfg, NewInMemoryAdapter(), Hooks{})
 	if err != nil {

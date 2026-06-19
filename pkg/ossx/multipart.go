@@ -9,7 +9,7 @@ import (
 )
 
 // MultipartSession represents an in-flight multipart upload context (FR-005).
-// A session is obtained via BlobStore.Multipart(ctx) and MUST be either
+// A session is obtained via MultipartStarter.Multipart(ctx) and MUST be either
 // Completed or Aborted to release staged parts. Complete/Abort are idempotent
 // (BR-007).
 type MultipartSession interface {
@@ -62,9 +62,9 @@ type HealthReport struct {
 	LastCheckedAt  int64
 }
 
-// multipartSession is the concrete session backed by a StoreAdapter.
+// multipartSession is the concrete session backed by a MultipartAdapter.
 type multipartSession struct {
-	store *blobStore
+	store *Store
 
 	// idempotency guard against double-complete / double-abort (BR-007).
 	mu   sync.Mutex
@@ -109,7 +109,7 @@ func (s *multipartSession) Initiate(ctx context.Context, key Key, opts PutOption
 	var id UploadID
 	_, err := s.store.run(ctx, "multipart_initiate", key, func(ctx context.Context) error {
 		var ierr error
-		id, ierr = s.store.adapter.InitiateMultipart(ctx, string(key), adapterOpts)
+		id, ierr = s.store.multipart.InitiateMultipart(ctx, string(key), adapterOpts)
 		return ierr
 	})
 	return id, err
@@ -132,7 +132,7 @@ func (s *multipartSession) UploadPart(ctx context.Context, id UploadID, partNumb
 	var part PartETag
 	_, err := s.store.run(ctx, "multipart_upload_part", "", func(ctx context.Context) error {
 		var perr error
-		part, perr = s.store.adapter.UploadPart(ctx, id, partNumber, body, size)
+		part, perr = s.store.multipart.UploadPart(ctx, id, partNumber, body, size)
 		return perr
 	})
 	if err != nil {
@@ -158,7 +158,7 @@ func (s *multipartSession) ListParts(ctx context.Context, id UploadID) ([]PartET
 	var parts []PartETag
 	_, err := s.store.run(ctx, "multipart_list_parts", "", func(ctx context.Context) error {
 		var perr error
-		parts, perr = s.store.adapter.ListParts(ctx, id)
+		parts, perr = s.store.multipart.ListParts(ctx, id)
 		return perr
 	})
 	return parts, err
@@ -194,7 +194,7 @@ func (s *multipartSession) Complete(ctx context.Context, id UploadID, parts []Pa
 	var info ObjectInfo
 	_, err := s.store.run(ctx, "multipart_complete", "", func(ctx context.Context) error {
 		var perr error
-		info, perr = s.store.adapter.CompleteMultipart(ctx, id, parts)
+		info, perr = s.store.multipart.CompleteMultipart(ctx, id, parts)
 		return perr
 	})
 	if err != nil {
@@ -217,7 +217,7 @@ func (s *multipartSession) Abort(ctx context.Context, id UploadID) error {
 	// BR-007: Abort is idempotent — aborting an already-aborted/completed id is not an error.
 	s.markDone(id)
 	_, err := s.store.run(ctx, "multipart_abort", "", func(ctx context.Context) error {
-		perr := s.store.adapter.AbortMultipart(ctx, id)
+		perr := s.store.multipart.AbortMultipart(ctx, id)
 		if perr == nil {
 			return nil
 		}
