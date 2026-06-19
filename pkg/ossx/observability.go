@@ -12,7 +12,7 @@ import (
 // local to stay provider-SDK-only in go.mod (mirrors sibling adapters).
 //
 // BR-009: secrets / signatures / credentials / full signed URLs / raw
-// metadata values MUST never reach a hook. The blobStore sanitizes keys
+// metadata values MUST never reach a hook. The Store sanitizes keys
 // (via Key.SanitizedScope) before emitting.
 type Hooks struct {
 	Metrics Metrics
@@ -93,8 +93,8 @@ type AuditEvent struct {
 	KeyScope      string // sanitized (Key.SanitizedScope)
 	ObjectSize    int64
 	Latency       time.Duration
-	TTLSeconds    int64            // presign only
-	Method        string           // presign method (GET/PUT)
+	TTLSeconds    int64             // presign only
+	Method        string            // presign method (GET/PUT)
 	ActorFields   map[string]string // caller-supplied, already sanitized
 	CorrelationID string
 	OccurredAt    time.Time

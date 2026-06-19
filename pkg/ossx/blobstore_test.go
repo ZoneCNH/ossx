@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -275,8 +276,73 @@ func TestHealthAndClose(t *testing.T) {
 // The public BlobStore interface is implemented; the SPI (StoreAdapter) is
 // exported so external adapters can implement it explicitly.
 func TestSPISurface(t *testing.T) {
-	var _ BlobStore = (*blobStore)(nil)
+	var _ BlobStore = (*Store)(nil)
+	var _ MultipartStarter = (*Store)(nil)
+	var _ Presigner = (*Store)(nil)
+	var _ HealthChecker = (*Store)(nil)
+	var _ StoreCloser = (*Store)(nil)
 	var _ StoreAdapter = (*InMemoryAdapter)(nil)
+	var _ MultipartAdapter = (*InMemoryAdapter)(nil)
+	var _ PresignAdapter = (*InMemoryAdapter)(nil)
+	var _ AdapterLifecycle = (*InMemoryAdapter)(nil)
+}
+
+func TestPublicInterfacesStayWithinGovernanceLimit(t *testing.T) {
+	limit := 7
+	interfaces := []struct {
+		name string
+		typ  reflect.Type
+	}{
+		{"BlobStore", reflect.TypeOf((*BlobStore)(nil)).Elem()},
+		{"MultipartStarter", reflect.TypeOf((*MultipartStarter)(nil)).Elem()},
+		{"Presigner", reflect.TypeOf((*Presigner)(nil)).Elem()},
+		{"HealthChecker", reflect.TypeOf((*HealthChecker)(nil)).Elem()},
+		{"StoreCloser", reflect.TypeOf((*StoreCloser)(nil)).Elem()},
+		{"StoreAdapter", reflect.TypeOf((*StoreAdapter)(nil)).Elem()},
+		{"MultipartAdapter", reflect.TypeOf((*MultipartAdapter)(nil)).Elem()},
+		{"PresignAdapter", reflect.TypeOf((*PresignAdapter)(nil)).Elem()},
+		{"AdapterLifecycle", reflect.TypeOf((*AdapterLifecycle)(nil)).Elem()},
+		{"MultipartSession", reflect.TypeOf((*MultipartSession)(nil)).Elem()},
+		{"Metrics", reflect.TypeOf((*Metrics)(nil)).Elem()},
+		{"Tracer", reflect.TypeOf((*Tracer)(nil)).Elem()},
+		{"Span", reflect.TypeOf((*Span)(nil)).Elem()},
+		{"Logger", reflect.TypeOf((*Logger)(nil)).Elem()},
+	}
+
+	for _, iface := range interfaces {
+		t.Run(iface.name, func(t *testing.T) {
+			if got := iface.typ.NumMethod(); got > limit {
+				t.Fatalf("%s has %d methods; governance limit is %d", iface.name, got, limit)
+			}
+		})
+	}
+}
+
+func TestNewBlobStoreRejectsMissingAdapterCapabilities(t *testing.T) {
+	cases := []struct {
+		name    string
+		adapter StoreAdapter
+		want    string
+	}{
+		{name: "missing multipart", adapter: capabilityCoreAdapter{}, want: "multipart"},
+		{name: "missing presign", adapter: capabilityMultipartAdapter{}, want: "presign"},
+		{name: "missing lifecycle", adapter: capabilityPresignAdapter{}, want: "lifecycle"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewBlobStore(validConfig(), tc.adapter, Hooks{})
+			if err == nil {
+				t.Fatalf("want capability error")
+			}
+			if errorKind(err) != ErrorKindConfig {
+				t.Fatalf("want config error, got %v", err)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("want error containing %q, got %v", tc.want, err)
+			}
+		})
+	}
 }
 
 // TC-011: Hooks emit non-nil and survive nil callbacks.
@@ -337,11 +403,75 @@ func validConfig() Config {
 	}
 }
 
-func mustStore(t *testing.T) BlobStore {
+func mustStore(t *testing.T) *Store {
 	t.Helper()
 	bs, err := NewBlobStore(validConfig(), NewInMemoryAdapter(), Hooks{})
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
 	return bs
+}
+
+type capabilityCoreAdapter struct{}
+
+func (capabilityCoreAdapter) Name() string { return "core-only" }
+
+func (capabilityCoreAdapter) PutObject(context.Context, string, io.Reader, int64, PutAdapterOptions) (ObjectInfo, error) {
+	return ObjectInfo{}, nil
+}
+
+func (capabilityCoreAdapter) GetObject(_ context.Context, key string) (io.ReadCloser, ObjectInfo, error) {
+	return io.NopCloser(strings.NewReader("")), ObjectInfo{Key: Key(key)}, nil
+}
+
+func (capabilityCoreAdapter) HeadObject(_ context.Context, key string) (ObjectInfo, error) {
+	return ObjectInfo{Key: Key(key)}, nil
+}
+
+func (capabilityCoreAdapter) DeleteObject(context.Context, string, bool) error {
+	return nil
+}
+
+func (capabilityCoreAdapter) CopyObject(_ context.Context, _ string, target string, _ CopyAdapterOptions) (ObjectInfo, error) {
+	return ObjectInfo{Key: Key(target)}, nil
+}
+
+func (capabilityCoreAdapter) ListObjects(context.Context, string, int, string) (ListPage, error) {
+	return ListPage{}, nil
+}
+
+type capabilityMultipartAdapter struct {
+	capabilityCoreAdapter
+}
+
+func (capabilityMultipartAdapter) InitiateMultipart(context.Context, string, PutAdapterOptions) (UploadID, error) {
+	return "upload", nil
+}
+
+func (capabilityMultipartAdapter) UploadPart(_ context.Context, _ UploadID, partNumber int, _ io.Reader, size int64) (PartETag, error) {
+	return PartETag{PartNumber: partNumber, ETag: "etag", Size: size}, nil
+}
+
+func (capabilityMultipartAdapter) ListParts(context.Context, UploadID) ([]PartETag, error) {
+	return nil, nil
+}
+
+func (capabilityMultipartAdapter) CompleteMultipart(context.Context, UploadID, []PartETag) (ObjectInfo, error) {
+	return ObjectInfo{}, nil
+}
+
+func (capabilityMultipartAdapter) AbortMultipart(context.Context, UploadID) error {
+	return nil
+}
+
+type capabilityPresignAdapter struct {
+	capabilityMultipartAdapter
+}
+
+func (capabilityPresignAdapter) PresignURL(_ context.Context, _ string, op PresignOperation, ttlSeconds int64, _ PresignAdapterOptions) (PresignedURL, error) {
+	return PresignedURL{
+		URL:       "https://example.test/object",
+		Method:    string(op),
+		ExpiresAt: time.Now().Unix() + ttlSeconds,
+	}, nil
 }

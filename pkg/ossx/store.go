@@ -5,18 +5,19 @@ import (
 	"io"
 )
 
-// StoreAdapter is the Storage Provider Interface that concrete adapters
+// StoreAdapter is the core Storage Provider Interface that concrete adapters
 // (adapters/aliyun, InMemoryAdapter, fake adapters) implement.
 //
-// Design (SPEC §13, FR-008): the SPI is exported so external adapter packages
-// can explicitly implement it (`var _ ossx.StoreAdapter = (*aliyun.Adapter)(nil)`),
-// but the public BlobStore API never exposes it — callers interact only via
-// BlobStore. It is streaming-first (io.Reader / io.ReadCloser) per FR-004 / §16
-// — adapters MUST NOT buffer whole objects. Provider SDK types never cross
+// Design (SPEC §13, FR-008): the SPI is exported so adapter packages and
+// composition roots can wire provider implementations explicitly
+// (`var _ ossx.StoreAdapter = (*aliyun.Adapter)(nil)`). Application callers
+// should depend on Store, BlobStore, or the narrow capability interfaces in
+// blobstore.go. It is streaming-first (io.Reader / io.ReadCloser) per FR-004 /
+// §16 — adapters MUST NOT buffer whole objects. Provider SDK types never cross
 // this boundary; adapters translate provider errors to ossx typed *Error at
 // every method exit (SPEC §11, BR-011).
 //
-// The public BlobStore (blobstore.go) wraps a StoreAdapter and adds: context
+// The public Store (blobstore.go) wraps adapter capabilities and adds: context
 // cancellation, policy validation, retry/circuit (retry.go), observability
 // hooks (observability.go), and typed-error guarantees.
 type StoreAdapter interface {
@@ -42,9 +43,11 @@ type StoreAdapter interface {
 
 	// ListObjects returns a bounded page matching prefix (BR-006).
 	ListObjects(ctx context.Context, prefix string, max int, continuation string) (ListPage, error)
+}
 
-	// --- Multipart (FR-005) ---
-
+// MultipartAdapter exposes multipart upload capabilities for adapters that
+// support FR-005.
+type MultipartAdapter interface {
 	// InitiateMultipart starts a multipart upload, returns upload id.
 	InitiateMultipart(ctx context.Context, key string, opts PutAdapterOptions) (UploadID, error)
 
@@ -59,14 +62,17 @@ type StoreAdapter interface {
 
 	// AbortMultipart cancels an upload and frees staged parts. Idempotent.
 	AbortMultipart(ctx context.Context, id UploadID) error
+}
 
-	// --- Presign (FR-006) ---
-
+// PresignAdapter exposes presigned URL creation for adapters that support
+// FR-006.
+type PresignAdapter interface {
 	// PresignURL generates a signed URL for op with ttl-second expiry.
 	PresignURL(ctx context.Context, key string, op PresignOperation, ttlSeconds int64, opts PresignAdapterOptions) (PresignedURL, error)
+}
 
-	// --- Lifecycle ---
-
+// AdapterLifecycle exposes adapter health and shutdown hooks.
+type AdapterLifecycle interface {
 	// Health probes the provider backend (lightweight, no writes).
 	Health(ctx context.Context) error
 
@@ -96,7 +102,10 @@ type PresignAdapterOptions struct {
 	ContentMD5  string
 }
 
-// compile-time guards: every concrete adapter must satisfy StoreAdapter.
+// compile-time guards: the default in-memory adapter satisfies the split adapter capability set.
 var (
-	_ StoreAdapter = (*InMemoryAdapter)(nil)
+	_ StoreAdapter     = (*InMemoryAdapter)(nil)
+	_ MultipartAdapter = (*InMemoryAdapter)(nil)
+	_ PresignAdapter   = (*InMemoryAdapter)(nil)
+	_ AdapterLifecycle = (*InMemoryAdapter)(nil)
 )

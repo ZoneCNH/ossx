@@ -9,10 +9,10 @@ import (
 )
 
 // envPrefix is the canonical configuration environment variable prefix.
-// Composition roots load these from a secret store (e.g.,
-// sre/secrets/env/ossx.env) before constructing ossx.Config. ossx never
-// imports a config loader (BR-002); ConfigFromEnv is a convenience that reads
-// plain os.Environ.
+// Composition roots load these from operator-owned secret material, such as
+// sre/secrets/env/dev.md, before constructing ossx.Config. ossx never imports
+// a config loader (BR-002); ConfigFromEnv is a convenience that reads plain
+// os.Environ.
 const envPrefix = "FOUNDATIONX_OSSX_"
 
 // ConfigFromEnv builds a Config from FOUNDATIONX_OSSX_* environment variables.

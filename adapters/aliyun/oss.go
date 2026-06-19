@@ -1,9 +1,10 @@
 // Package aliyun implements the real Aliyun OSS adapter for ossx.
 //
 // The Aliyun OSS SDK (github.com/aliyun/aliyun-oss-go-sdk/oss) is imported ONLY
-// in this package (FR-008 / BR-011). It implements ossx.StoreAdapter (the
-// exported SPI), so no SDK type ever crosses into the public ossx API. Provider
-// errors are translated to ossx typed *Error at every method exit (SPEC §11).
+// in this package (FR-008 / BR-011). It implements the exported ossx adapter
+// capability set, so no SDK type ever crosses into the public ossx API.
+// Provider errors are translated to ossx typed *Error at every method exit
+// (SPEC §11).
 //
 // Construction: NewAdapter(ctx, cfg) builds an SDK-backed Adapter from an
 // ossx.Config. Credentials come from cfg (populated by the composition root,
@@ -19,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	oss "github.com/aliyun/aliyun-oss-go-sdk/oss"
@@ -26,13 +28,13 @@ import (
 	"github.com/ZoneCNH/ossx/pkg/ossx"
 )
 
-// Adapter is the Aliyun OSS StoreAdapter implementation.
+// Adapter is the Aliyun OSS implementation of the split adapter capabilities.
 type Adapter struct {
 	client    *oss.Client
 	bucket    *oss.Bucket
 	cfg       ossx.Config
 	closeOnce sync.Once
-	closed    bool
+	closed    atomic.Bool
 
 	// uploads maps ossx UploadID → SDK InitiateMultipartUploadResult handle.
 	// Required because the SDK threads the imur struct through UploadPart/
@@ -41,8 +43,13 @@ type Adapter struct {
 	uploads map[string]oss.InitiateMultipartUploadResult
 }
 
-// compile-time guarantee: *Adapter satisfies ossx.StoreAdapter.
-var _ ossx.StoreAdapter = (*Adapter)(nil)
+// compile-time guarantee: *Adapter satisfies the full adapter capability set.
+var (
+	_ ossx.StoreAdapter     = (*Adapter)(nil)
+	_ ossx.MultipartAdapter = (*Adapter)(nil)
+	_ ossx.PresignAdapter   = (*Adapter)(nil)
+	_ ossx.AdapterLifecycle = (*Adapter)(nil)
+)
 
 // NewAdapter constructs an Aliyun OSS Adapter from an ossx.Config.
 //
@@ -72,10 +79,12 @@ func NewAdapter(_ context.Context, cfg ossx.Config) (*Adapter, error) {
 // Name returns the adapter identifier.
 func (a *Adapter) Name() string { return "aliyun-oss" }
 
+func (a *Adapter) isClosed() bool { return a.closed.Load() }
+
 // PutObject streams body to key (FR-004 — no whole-object buffering; the SDK
 // reads the io.Reader directly).
 func (a *Adapter) PutObject(ctx context.Context, key string, body io.Reader, _ int64, opts ossx.PutAdapterOptions) (ossx.ObjectInfo, error) {
-	if a.closed {
+	if a.isClosed() {
 		return ossx.ObjectInfo{}, ossx.ErrClosed
 	}
 	options := buildPutOptions(opts)
@@ -97,7 +106,7 @@ func (a *Adapter) PutObject(ctx context.Context, key string, body io.Reader, _ i
 
 // GetObject returns a streaming reader (FR-004).
 func (a *Adapter) GetObject(ctx context.Context, key string) (io.ReadCloser, ossx.ObjectInfo, error) {
-	if a.closed {
+	if a.isClosed() {
 		return nil, ossx.ObjectInfo{}, ossx.ErrClosed
 	}
 	body, err := a.bucket.GetObject(key, sdkOptions(ctx)...)
@@ -110,7 +119,7 @@ func (a *Adapter) GetObject(ctx context.Context, key string) (io.ReadCloser, oss
 
 // HeadObject returns metadata via GetObjectMeta.
 func (a *Adapter) HeadObject(ctx context.Context, key string) (ossx.ObjectInfo, error) {
-	if a.closed {
+	if a.isClosed() {
 		return ossx.ObjectInfo{}, ossx.ErrClosed
 	}
 	return a.headInfo(ctx, key)
@@ -141,10 +150,15 @@ func (a *Adapter) headInfo(ctx context.Context, key string) (ossx.ObjectInfo, er
 }
 
 // DeleteObject removes key. Aliyun OSS DeleteObject is idempotent for missing
-// objects; strict semantics are enforced at the BlobStore layer.
-func (a *Adapter) DeleteObject(ctx context.Context, key string, _ bool) error {
-	if a.closed {
+// objects, so strict mode first verifies existence with HeadObject.
+func (a *Adapter) DeleteObject(ctx context.Context, key string, strict bool) error {
+	if a.isClosed() {
 		return ossx.ErrClosed
+	}
+	if strict {
+		if _, err := a.headInfo(ctx, key); err != nil {
+			return err
+		}
 	}
 	if err := a.bucket.DeleteObject(key, sdkOptions(ctx)...); err != nil {
 		return translateError("DeleteObject", err)
@@ -154,7 +168,7 @@ func (a *Adapter) DeleteObject(ctx context.Context, key string, _ bool) error {
 
 // CopyObject duplicates source to target server-side.
 func (a *Adapter) CopyObject(ctx context.Context, source, target string, _ ossx.CopyAdapterOptions) (ossx.ObjectInfo, error) {
-	if a.closed {
+	if a.isClosed() {
 		return ossx.ObjectInfo{}, ossx.ErrClosed
 	}
 	result, err := a.bucket.CopyObject(source, target, sdkOptions(ctx)...)
@@ -172,7 +186,7 @@ func (a *Adapter) CopyObject(ctx context.Context, source, target string, _ ossx.
 
 // ListObjects returns a bounded page (BR-006).
 func (a *Adapter) ListObjects(ctx context.Context, prefix string, max int, continuation string) (ossx.ListPage, error) {
-	if a.closed {
+	if a.isClosed() {
 		return ossx.ListPage{}, ossx.ErrClosed
 	}
 	if max <= 0 || max > 1000 {
@@ -212,7 +226,7 @@ func (a *Adapter) ListObjects(ctx context.Context, prefix string, max int, conti
 
 // InitiateMultipart starts a multipart upload.
 func (a *Adapter) InitiateMultipart(ctx context.Context, key string, opts ossx.PutAdapterOptions) (ossx.UploadID, error) {
-	if a.closed {
+	if a.isClosed() {
 		return "", ossx.ErrClosed
 	}
 	imur, err := a.bucket.InitiateMultipartUpload(key, sdkOptions(ctx, buildPutOptions(opts)...)...)
@@ -228,7 +242,7 @@ func (a *Adapter) InitiateMultipart(ctx context.Context, key string, opts ossx.P
 
 // UploadPart stages a part.
 func (a *Adapter) UploadPart(ctx context.Context, id ossx.UploadID, partNumber int, body io.Reader, size int64) (ossx.PartETag, error) {
-	if a.closed {
+	if a.isClosed() {
 		return ossx.PartETag{}, ossx.ErrClosed
 	}
 	a.mu.Lock()
@@ -254,7 +268,7 @@ func (a *Adapter) UploadPart(ctx context.Context, id ossx.UploadID, partNumber i
 
 // ListParts returns uploaded parts.
 func (a *Adapter) ListParts(ctx context.Context, id ossx.UploadID) ([]ossx.PartETag, error) {
-	if a.closed {
+	if a.isClosed() {
 		return nil, ossx.ErrClosed
 	}
 	a.mu.Lock()
@@ -280,7 +294,7 @@ func (a *Adapter) ListParts(ctx context.Context, id ossx.UploadID) ([]ossx.PartE
 
 // CompleteMultipart finalizes the upload.
 func (a *Adapter) CompleteMultipart(ctx context.Context, id ossx.UploadID, parts []ossx.PartETag) (ossx.ObjectInfo, error) {
-	if a.closed {
+	if a.isClosed() {
 		return ossx.ObjectInfo{}, ossx.ErrClosed
 	}
 	a.mu.Lock()
@@ -317,7 +331,7 @@ func (a *Adapter) CompleteMultipart(ctx context.Context, id ossx.UploadID, parts
 
 // AbortMultipart cancels the upload. Idempotent.
 func (a *Adapter) AbortMultipart(ctx context.Context, id ossx.UploadID) error {
-	if a.closed {
+	if a.isClosed() {
 		return nil
 	}
 	a.mu.Lock()
@@ -339,7 +353,7 @@ func (a *Adapter) AbortMultipart(ctx context.Context, id ossx.UploadID) error {
 
 // PresignURL signs a URL via bucket.SignURL (FR-006).
 func (a *Adapter) PresignURL(ctx context.Context, key string, op ossx.PresignOperation, ttlSeconds int64, opts ossx.PresignAdapterOptions) (ossx.PresignedURL, error) {
-	if a.closed {
+	if a.isClosed() {
 		return ossx.PresignedURL{}, ossx.ErrClosed
 	}
 	var method oss.HTTPMethod
@@ -370,7 +384,7 @@ func (a *Adapter) PresignURL(ctx context.Context, key string, op ossx.PresignOpe
 
 // Health probes the bucket via a lightweight GetBucketInfo (client-level call).
 func (a *Adapter) Health(ctx context.Context) error {
-	if a.closed {
+	if a.isClosed() {
 		return ossx.ErrClosed
 	}
 	if _, err := a.client.GetBucketInfo(a.cfg.Bucket, sdkOptions(ctx)...); err != nil {
@@ -382,7 +396,7 @@ func (a *Adapter) Health(ctx context.Context) error {
 // Close releases resources. Idempotent.
 func (a *Adapter) Close(_ context.Context) error {
 	a.closeOnce.Do(func() {
-		a.closed = true
+		a.closed.Store(true)
 	})
 	return nil
 }
