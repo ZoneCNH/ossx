@@ -1,79 +1,376 @@
-# CI/CD Workflow 参考模板 — ossx (Aliyun OSS L2 Adapter)
-#
-# 将此文件复制到 github.com/ZoneCNH/ossx/.github/workflows/ci.yml
-# 并根据实际 Aliyun OSS endpoint 和 credential 配置调整。
-#
-# 当前状态: EXT_CI=❌ (待部署)
-# 模板来源: ZoneCNH/ZoneCNH module/ossx/ci-workflow.yaml (Trust Alignment 2026-06-14)
+# ossx CI/CD. All jobs must run on sre/ machine pools.
 
-name: CI
+name: CI/CD
 
 on:
   pull_request:
     branches: [main]
   push:
     branches: [main]
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      rollback_ref:
+        description: "Optional tag/ref for rollback drill"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SRE_CI_POOL: "sre/storage-light"
+  SRE_DEPLOY_POOL: "sre/deploy"
+  EVIDENCE_DIR: "release/evidence"
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
+  ci-preflight:
+    name: CI Preflight
+    runs-on: [self-hosted, Linux, X64, sre/storage-light]
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: actions/setup-go@f111f3307d8850f501ac008e886eec1fd1932a34 # v5.3.0
-        with:
-          go-version: "1.23"
-      - name: Unit Test
-        run: go test ./... -race -count=1 -short
-      - name: Vet
-        run: go vet ./...
-
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - uses: actions/setup-go@f111f3307d8850f501ac008e886eec1fd1932a34
-        with:
-          go-version: "1.23"
-      - name: Lint
-        uses: golangci/golangci-lint-action@v6
-
-  # 需要 Aliyun OSS credentials (OSS_ENDPOINT, OSS_ACCESS_KEY_ID, OSS_ACCESS_KEY_SECRET)
-  # 在 GitHub Secrets 中配置后启用此 job
-  integration:
-    if: false  # 启用条件: 配置 OSS_* secrets 后改为 true
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - uses: actions/setup-go@f111f3307d8850f501ac008e886eec1fd1932a34
-        with:
-          go-version: "1.23"
-      - name: Integration Test
-        env:
-          OSS_ENDPOINT: ${{ secrets.OSS_ENDPOINT }}
-          OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
-          OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
-        run: go test ./... -run Integration -count=1 -v
-
-  trust-alignment:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - uses: actions/setup-go@f111f3307d8850f501ac008e886eec1fd1932a34
-        with:
-          go-version: "1.23"
-      - name: Install xlibgate
-        run: go install github.com/ZoneCNH/xlibgate/cmd/xlibgate@v1.0.0
-      - name: Trust Alignment
-        run: |
-          GOWORK=off xlibgate trust identity --repo .
-          GOWORK=off xlibgate trust template-residue --repo .
-          GOWORK=off xlibgate trust release-consistency --offline --repo .
-          GOWORK=off xlibgate trust secret-redaction --repo . --path release/evidence
-
-  secret-scan:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Verify SRE machine pool
+        run: |
+          case "${{ env.SRE_CI_POOL }}" in
+            sre/*) ;;
+            *) echo "ERROR: CI must run on sre/ machine pool"; exit 1 ;;
+          esac
+      - name: Download modules
+        run: GOWORK=off go mod download
+      - name: Verify module metadata
+        run: |
+          test -f go.mod
+          go env GOMOD
+          go version
+
+  build:
+    name: Build
+    needs: ci-preflight
+    runs-on: [self-hosted, Linux, X64, sre/storage-light]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build all packages
+        run: GOWORK=off go build ./...
+
+  test:
+    name: Unit Test
+    needs: ci-preflight
+    runs-on: [self-hosted, Linux, X64, sre/storage-light]
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run race-enabled tests
+        run: GOWORK=off go test ./... -race -count=1
+      - name: Enforce pkg/ossx 100% coverage
+        run: |
+          GOWORK=off go test ./pkg/ossx -count=1 -covermode=atomic -coverprofile=pkg-ossx.coverage.out
+          total="$(go tool cover -func=pkg-ossx.coverage.out | awk '/^total:/ {print $3}')"
+          {
+            printf 'pkg/ossx total coverage: %s\n' "$total"
+            go tool cover -func=pkg-ossx.coverage.out
+          } | tee pkg-ossx-coverage.txt
+          if [ "$total" != "100.0%" ]; then
+            echo "::error::pkg/ossx statement coverage must be 100.0%, got ${total:-unknown}"
+            exit 1
+          fi
+      - name: Summarize all-package coverage
+        run: |
+          GOWORK=off go test ./... -count=1 -covermode=atomic -coverprofile=all.coverage.out
+          go tool cover -func=all.coverage.out | tee all-coverage.txt
+      - name: Upload coverage evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ github.sha }}
+          path: |
+            pkg-ossx.coverage.out
+            pkg-ossx-coverage.txt
+            all.coverage.out
+            all-coverage.txt
+
+  lint:
+    name: Lint
+    needs: ci-preflight
+    runs-on: [self-hosted, Linux, X64, sre/storage-light]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Go vet
+        run: GOWORK=off go vet ./...
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v2.1.6
+
+  boundary:
+    name: Boundary And Trust Gates
+    needs: ci-preflight
+    runs-on: [self-hosted, Linux, X64, sre/storage-light]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install xlibgate
+        run: |
+          if command -v xlibgate >/dev/null 2>&1 && xlibgate trust --help >/dev/null 2>&1; then
+            exit 0
+          fi
+
+          if [ -d /home/xlibgate ]; then
+            mkdir -p "$HOME/.local/bin"
+            (cd /home/xlibgate && GOBIN="$HOME/.local/bin" GOWORK=off go install ./cmd/xlibgate)
+            "$HOME/.local/bin/xlibgate" trust --help >/dev/null
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+            exit 0
+          fi
+
+          echo "::error::xlibgate trust CLI is not installed. Install the fixed trust build from /home/xlibgate or the next tagged release; v1.0.0 lacks trust and the current untagged remote build has release parser drift."
+          exit 1
+      - name: Run boundary checks
+        run: |
+          xlibgate trust identity --repo .
+          xlibgate trust release-consistency --offline --repo .
+          xlibgate trust template-residue --repo .
+          xlibgate trust testkit-prod-import --repo .
+          xlibgate trust secret-redaction --repo .
+          # Full factory maturity remains an evidence gate; it is expected to
+          # block until live/external CI/downstream/soak artifacts exist.
+
+  integration:
+    name: Integration Test
+    needs: ci-preflight
+    runs-on: [self-hosted, Linux, X64, sre/storage-light]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run optional integration suite
+        env:
+          OSSX_LIVE_INTEGRATION: "1"
+          FOUNDATIONX_OSSX_ENDPOINT: ${{ secrets.FOUNDATIONX_OSSX_ENDPOINT }}
+          FOUNDATIONX_OSSX_REGION: ${{ secrets.FOUNDATIONX_OSSX_REGION }}
+          FOUNDATIONX_OSSX_BUCKET: ${{ secrets.FOUNDATIONX_OSSX_BUCKET }}
+          FOUNDATIONX_OSSX_ACCESS_KEY: ${{ secrets.FOUNDATIONX_OSSX_ACCESS_KEY }}
+          FOUNDATIONX_OSSX_SECRET_KEY: ${{ secrets.FOUNDATIONX_OSSX_SECRET_KEY }}
+          FOUNDATIONX_OSSX_USE_SSL: ${{ secrets.FOUNDATIONX_OSSX_USE_SSL }}
+        run: |
+          missing=0
+          for name in FOUNDATIONX_OSSX_ENDPOINT FOUNDATIONX_OSSX_REGION FOUNDATIONX_OSSX_BUCKET FOUNDATIONX_OSSX_ACCESS_KEY FOUNDATIONX_OSSX_SECRET_KEY; do
+            if [ -z "${!name:-}" ]; then
+              echo "::warning::missing $name"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            if [[ "${GITHUB_REF:-}" == refs/tags/v* ]]; then
+              echo "::error::OSS integration credentials are required for release tags"
+              exit 1
+            fi
+            echo "OSS integration credentials are not configured; skipping external integration."
+            exit 0
+          fi
+          if [ -f Makefile ] && grep -qE '^integration:' Makefile; then
+            GOWORK=off make integration
+          else
+            GOWORK=off go test -tags integration ./adapters/aliyun/ -count=1 -v -timeout 120s
+          fi
+
+  secret-scan:
+    name: Secret Scan
+    needs: ci-preflight
+    runs-on: [self-hosted, Linux, X64, sre/storage-light]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+
+  evidence:
+    name: Evidence Package
+    needs: [build, test, lint, boundary, integration, secret-scan]
+    runs-on: [self-hosted, Linux, X64, sre/storage-light]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create CI evidence manifest
+        run: |
+          mkdir -p "${{ env.EVIDENCE_DIR }}"
+          cat > "${{ env.EVIDENCE_DIR }}/ci-manifest.json" <<'JSON'
+          {
+            "module": "ossx",
+            "ci_pool": "sre/storage-light",
+            "deploy_pool": "sre/deploy",
+            "runner_namespace": "sre/",
+            "coverage_gate": "pkg/ossx total 100.0%",
+            "integration_gate": "optional on pull_request/main, required on release tags",
+            "required_jobs": [
+              "ci-preflight",
+              "build",
+              "test",
+              "lint",
+              "boundary",
+              "integration",
+              "secret-scan",
+              "evidence"
+            ]
+          }
+          JSON
+      - name: Upload CI evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-evidence-${{ github.sha }}
+          path: ${{ env.EVIDENCE_DIR }}/
+
+  release-preflight:
+    name: Release Preflight
+    needs: evidence
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, Linux, X64, sre/deploy]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Verify release machine pool
+        run: |
+          case "${{ env.SRE_DEPLOY_POOL }}" in
+            sre/*) ;;
+            *) echo "ERROR: CD must run on sre/ machine pool"; exit 1 ;;
+          esac
+      - name: Validate release ref
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            git describe --tags --exact-match
+            version="$(tr -d '[:space:]' < VERSION)"
+            if [ "$version" != "${{ github.ref_name }}" ]; then
+              echo "::error::VERSION must match release tag; VERSION=$version tag=${{ github.ref_name }}"
+              exit 1
+            fi
+            grep -q "\"version\": \"$version\"" release/manifest/latest.json
+            grep -q "table_version: $version" .repo-contract.yaml
+            grep -q "latest_git_tag: $version" .repo-contract.yaml
+            grep -q "## $version" CHANGELOG.md
+          fi
+          test -f release/evidence/local-acceptance.md
+          test -f release/manifest/latest.json
+      - name: Re-run release checks
+        run: |
+          GOWORK=off go test ./... -race -count=1
+          GOWORK=off go test ./pkg/ossx -count=1 -covermode=atomic -coverprofile=pkg-ossx.coverage.out
+          total="$(go tool cover -func=pkg-ossx.coverage.out | awk '/^total:/ {print $3}')"
+          if [ "$total" != "100.0%" ]; then
+            echo "::error::pkg/ossx statement coverage must be 100.0%, got ${total:-unknown}"
+            exit 1
+          fi
+          GOWORK=off go list ./... >/tmp/packages.txt
+
+  release-publish:
+    name: Publish Release
+    needs: release-preflight
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: [self-hosted, Linux, X64, sre/deploy]
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
+            gh release upload "${{ github.ref_name }}" release/manifest/latest.json release/evidence/local-acceptance.md --clobber
+          else
+            gh release create "${{ github.ref_name }}" \
+              --verify-tag \
+              --title "${{ github.ref_name }}" \
+              --notes-file release/evidence/local-acceptance.md \
+              release/manifest/latest.json \
+              release/evidence/local-acceptance.md
+          fi
+
+  post-release-smoke:
+    name: Post Release Smoke
+    needs: release-publish
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: [self-hosted, Linux, X64, sre/deploy]
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "${{ github.ref_name }}"
+          test "${{ env.SRE_DEPLOY_POOL }}" = "sre/deploy"
+
+  rollback-drill:
+    name: Rollback Drill
+    if: github.event_name == 'workflow_dispatch' && inputs.rollback_ref != ''
+    runs-on: [self-hosted, Linux, X64, sre/deploy]
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Produce rollback plan
+        run: |
+          mkdir -p "${{ env.EVIDENCE_DIR }}"
+          cat > "${{ env.EVIDENCE_DIR }}/rollback-plan.md" <<'PLAN'
+          # Rollback Plan
+
+          - Module: ossx
+          - Requested rollback ref: ${{ inputs.rollback_ref }}
+          - Runner pool: sre/deploy
+          - Action: validate target ref and prepare manual release reversal evidence.
+          PLAN
+          git rev-parse --verify "${{ inputs.rollback_ref }}^{commit}"
+      - name: Upload rollback evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: rollback-plan-${{ github.run_id }}
+          path: ${{ env.EVIDENCE_DIR }}/rollback-plan.md
