@@ -226,7 +226,7 @@ func (b *blobStore) Copy(ctx context.Context, source Key, target Key, opts CopyO
 	if err := validateKeyPolicy(b.cfg.Policy.Permission, string(target)); err != nil {
 		return ObjectInfo{}, err
 	}
-	adapterOpts := CopyAdapterOptions{Metadata: opts.Metadata, ContentType: opts.ContentType}
+	adapterOpts := CopyAdapterOptions(opts)
 	var info ObjectInfo
 	_, err := b.run(ctx, "copy", target, func(ctx context.Context) error {
 		var perr error

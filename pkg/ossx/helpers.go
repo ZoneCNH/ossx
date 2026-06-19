@@ -97,8 +97,11 @@ func wrapChecksumVerifier(r *ObjectReader, info ObjectInfo) *ObjectReader {
 		base:     orig,
 		hasher:   h,
 		expected: info.ChecksumHex,
-		onDone: func(ok bool) { verified = ok },
-		verify:   func() bool { return verified },
+		onDone: func(ok bool) {
+			verified = ok
+			r.ChecksumVerified = ok
+		},
+		verify: func() bool { return verified },
 	}
 	return r
 }
@@ -116,9 +119,7 @@ type checksumReader struct {
 func (c *checksumReader) Read(p []byte) (int, error) {
 	n, err := c.base.Read(p)
 	if n > 0 {
-		if _, werr := c.hasher.Write(p[:n]); werr != nil {
-			return n, werr
-		}
+		_, _ = c.hasher.Write(p[:n])
 	}
 	if err == io.EOF && !c.checked {
 		c.checked = true

@@ -53,7 +53,11 @@ func TestStreamingPutGetRoundTripLargePayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	defer reader.Close()
+	defer func() {
+		if err := reader.Close(); err != nil {
+			t.Fatalf("close reader: %v", err)
+		}
+	}()
 	got, err := io.ReadAll(reader)
 	if err != nil {
 		t.Fatalf("read: %v", err)
@@ -215,9 +219,8 @@ func TestPresignAuditMasked(t *testing.T) {
 	}
 	// The signed URL must never appear in the audit payload.
 	for _, msg := range ml.messages {
-		if strings.Contains(msg, "expires=") && strings.Contains(msg, "http") {
-			// in-memory adapter URL is memory:// — not a real signed URL; just ensure
-			// the audit op label is present, not a raw credential.
+		if strings.Contains(msg, "expires=") || strings.Contains(msg, "memory://") || strings.Contains(msg, "http://") || strings.Contains(msg, "https://") {
+			t.Fatalf("audit log leaked signed URL: %s", msg)
 		}
 		if strings.Contains(msg, "LTAI") || strings.Contains(msg, "secret") {
 			t.Fatalf("audit log leaked secret: %s", msg)

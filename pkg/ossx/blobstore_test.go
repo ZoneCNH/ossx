@@ -106,7 +106,9 @@ func TestBlobStoreCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	rdr.Close()
+	if err := rdr.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
 	if !bytes.Equal(got, body) {
 		t.Fatalf("body mismatch")
 	}

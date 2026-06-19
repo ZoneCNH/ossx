@@ -65,14 +65,8 @@ func (b *blobStore) Presign(ctx context.Context, key Key, op PresignOperation, o
 		return PresignedURL{}, err
 	}
 
-	// FR-006: checksum constraint (ContentMD5 may be required by policy).
-	if b.cfg.Checksum.Required && opts.ContentMD5 == "" {
-		// Soft requirement: only enforce when policy explicitly requires and
-		// the operation is a PUT (which can carry a content hash).
-		if op == PresignPut {
-			// Not a hard failure in v1.1.0 — adapters may still sign; log it.
-		}
-	}
+	// Checksum.Required is intentionally not enforced for presign in v1.1.0:
+	// adapters may sign PUT URLs while callers attach payload checksums during upload.
 
 	adapterOpts := PresignAdapterOptions{
 		ContentType: opts.ContentType,
@@ -103,13 +97,13 @@ func (b *blobStore) emitPresignAudit(ctx context.Context, start time.Time, key K
 	}
 	_ = rawURL // validated upstream; never logged (BR-009)
 	ev := AuditEvent{
-		Operation:   "presign",
-		Result:      result,
-		KeyScope:    key.SanitizedScope(),
-		Latency:     nowFn().Sub(start),
-		TTLSeconds:  opts.TTL,
-		Method:      string(op),
-		OccurredAt:  nowFn(),
+		Operation:  "presign",
+		Result:     result,
+		KeyScope:   key.SanitizedScope(),
+		Latency:    nowFn().Sub(start),
+		TTLSeconds: opts.TTL,
+		Method:     string(op),
+		OccurredAt: nowFn(),
 	}
 	b.hooks.emitAudit(ctx, ev)
 }

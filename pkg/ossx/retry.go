@@ -96,10 +96,10 @@ type circuitBreaker struct {
 	threshold int
 	cooldown  time.Duration
 
-	mu          sync.Mutex
-	failures    int
-	state       breakerState
-	openedAt    time.Time
+	mu       sync.Mutex
+	failures int
+	state    breakerState
+	openedAt time.Time
 }
 
 type breakerState int
@@ -172,9 +172,6 @@ func (cb *circuitBreaker) do(ctx context.Context, op string, p retryPolicy, fn f
 	}
 	return err
 }
-
-// errCircuitOpen distinguishes breaker-open from other unavailable errors.
-var errCircuitOpen = newError(ErrorKindUnavailable, "", "circuit breaker open")
 
 // isErrCircuitOpen reports whether err is the breaker-open sentinel.
 func isErrCircuitOpen(err error) bool {

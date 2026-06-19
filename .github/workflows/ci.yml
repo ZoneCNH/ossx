@@ -83,16 +83,32 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Run race-enabled tests
-        run: GOWORK=off go test ./... -race -count=1 -coverprofile=coverage.out
-      - name: Summarize coverage
-        run: go tool cover -func=coverage.out | tee coverage.txt
+        run: GOWORK=off go test ./... -race -count=1
+      - name: Enforce pkg/ossx 100% coverage
+        run: |
+          GOWORK=off go test ./pkg/ossx -count=1 -covermode=atomic -coverprofile=pkg-ossx.coverage.out
+          total="$(go tool cover -func=pkg-ossx.coverage.out | awk '/^total:/ {print $3}')"
+          {
+            printf 'pkg/ossx total coverage: %s\n' "$total"
+            go tool cover -func=pkg-ossx.coverage.out
+          } | tee pkg-ossx-coverage.txt
+          if [ "$total" != "100.0%" ]; then
+            echo "::error::pkg/ossx statement coverage must be 100.0%, got ${total:-unknown}"
+            exit 1
+          fi
+      - name: Summarize all-package coverage
+        run: |
+          GOWORK=off go test ./... -count=1 -covermode=atomic -coverprofile=all.coverage.out
+          go tool cover -func=all.coverage.out | tee all-coverage.txt
       - name: Upload coverage evidence
         uses: actions/upload-artifact@v4
         with:
           name: coverage-${{ github.sha }}
           path: |
-            coverage.out
-            coverage.txt
+            pkg-ossx.coverage.out
+            pkg-ossx-coverage.txt
+            all.coverage.out
+            all-coverage.txt
 
   lint:
     name: Lint
@@ -110,7 +126,7 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: latest
+          version: v2.1.6
 
   boundary:
     name: Boundary And Trust Gates
@@ -124,12 +140,30 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Install xlibgate
-        run: go install github.com/ZoneCNH/xlibgate/cmd/xlibgate@v1.0.2
+        run: |
+          if command -v xlibgate >/dev/null 2>&1 && xlibgate trust --help >/dev/null 2>&1; then
+            exit 0
+          fi
+
+          if [ -d /home/xlibgate ]; then
+            mkdir -p "$HOME/.local/bin"
+            (cd /home/xlibgate && GOBIN="$HOME/.local/bin" GOWORK=off go install ./cmd/xlibgate)
+            "$HOME/.local/bin/xlibgate" trust --help >/dev/null
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+            exit 0
+          fi
+
+          echo "::error::xlibgate trust CLI is not installed. Install the fixed trust build from /home/xlibgate or the next tagged release; v1.0.0 lacks trust and the current untagged remote build has release parser drift."
+          exit 1
       - name: Run boundary checks
         run: |
           xlibgate trust identity --repo .
-          xlibgate trust dependency --repo .
           xlibgate trust release-consistency --offline --repo .
+          xlibgate trust template-residue --repo .
+          xlibgate trust testkit-prod-import --repo .
+          xlibgate trust secret-redaction --repo .
+          # Full factory maturity remains an evidence gate; it is expected to
+          # block until live/external CI/downstream/soak artifacts exist.
 
   integration:
     name: Integration Test
@@ -150,8 +184,20 @@ jobs:
           FOUNDATIONX_OSSX_BUCKET: ${{ secrets.FOUNDATIONX_OSSX_BUCKET }}
           FOUNDATIONX_OSSX_ACCESS_KEY: ${{ secrets.FOUNDATIONX_OSSX_ACCESS_KEY }}
           FOUNDATIONX_OSSX_SECRET_KEY: ${{ secrets.FOUNDATIONX_OSSX_SECRET_KEY }}
+          FOUNDATIONX_OSSX_USE_SSL: ${{ secrets.FOUNDATIONX_OSSX_USE_SSL }}
         run: |
-          if [ -z "${FOUNDATIONX_OSSX_ENDPOINT:-}" ] || [ -z "${FOUNDATIONX_OSSX_REGION:-}" ] || [ -z "${FOUNDATIONX_OSSX_BUCKET:-}" ] || [ -z "${FOUNDATIONX_OSSX_ACCESS_KEY:-}" ] || [ -z "${FOUNDATIONX_OSSX_SECRET_KEY:-}" ]; then
+          missing=0
+          for name in FOUNDATIONX_OSSX_ENDPOINT FOUNDATIONX_OSSX_REGION FOUNDATIONX_OSSX_BUCKET FOUNDATIONX_OSSX_ACCESS_KEY FOUNDATIONX_OSSX_SECRET_KEY; do
+            if [ -z "${!name:-}" ]; then
+              echo "::warning::missing $name"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            if [[ "${GITHUB_REF:-}" == refs/tags/v* ]]; then
+              echo "::error::OSS integration credentials are required for release tags"
+              exit 1
+            fi
             echo "OSS integration credentials are not configured; skipping external integration."
             exit 0
           fi
@@ -189,6 +235,8 @@ jobs:
             "ci_pool": "sre/storage-light",
             "deploy_pool": "sre/deploy",
             "runner_namespace": "sre/",
+            "coverage_gate": "pkg/ossx total 100.0%",
+            "integration_gate": "optional on pull_request/main, required on release tags",
             "required_jobs": [
               "ci-preflight",
               "build",
@@ -231,10 +279,27 @@ jobs:
         run: |
           if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
             git describe --tags --exact-match
+            version="$(tr -d '[:space:]' < VERSION)"
+            if [ "$version" != "${{ github.ref_name }}" ]; then
+              echo "::error::VERSION must match release tag; VERSION=$version tag=${{ github.ref_name }}"
+              exit 1
+            fi
+            grep -q "\"version\": \"$version\"" release/manifest/latest.json
+            grep -q "table_version: $version" .repo-contract.yaml
+            grep -q "latest_git_tag: $version" .repo-contract.yaml
+            grep -q "## $version" CHANGELOG.md
           fi
+          test -f release/evidence/local-acceptance.md
+          test -f release/manifest/latest.json
       - name: Re-run release checks
         run: |
           GOWORK=off go test ./... -race -count=1
+          GOWORK=off go test ./pkg/ossx -count=1 -covermode=atomic -coverprofile=pkg-ossx.coverage.out
+          total="$(go tool cover -func=pkg-ossx.coverage.out | awk '/^total:/ {print $3}')"
+          if [ "$total" != "100.0%" ]; then
+            echo "::error::pkg/ossx statement coverage must be 100.0%, got ${total:-unknown}"
+            exit 1
+          fi
           GOWORK=off go list ./... >/tmp/packages.txt
 
   release-publish:
@@ -253,8 +318,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if ! gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
-            gh release create "${{ github.ref_name }}" --verify-tag --generate-notes
+          if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
+            gh release upload "${{ github.ref_name }}" release/manifest/latest.json release/evidence/local-acceptance.md --clobber
+          else
+            gh release create "${{ github.ref_name }}" \
+              --verify-tag \
+              --title "${{ github.ref_name }}" \
+              --notes-file release/evidence/local-acceptance.md \
+              release/manifest/latest.json \
+              release/evidence/local-acceptance.md
           fi
 
   post-release-smoke:

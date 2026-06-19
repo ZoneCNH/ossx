@@ -79,7 +79,7 @@ func (a *Adapter) PutObject(ctx context.Context, key string, body io.Reader, _ i
 		return ossx.ObjectInfo{}, ossx.ErrClosed
 	}
 	options := buildPutOptions(opts)
-	if err := a.bucket.PutObject(key, body, options...); err != nil {
+	if err := a.bucket.PutObject(key, body, sdkOptions(ctx, options...)...); err != nil {
 		return ossx.ObjectInfo{}, translateError("PutObject", err)
 	}
 	// Fetch metadata to populate ObjectInfo (etag/size/modified).
@@ -100,7 +100,7 @@ func (a *Adapter) GetObject(ctx context.Context, key string) (io.ReadCloser, oss
 	if a.closed {
 		return nil, ossx.ObjectInfo{}, ossx.ErrClosed
 	}
-	body, err := a.bucket.GetObject(key)
+	body, err := a.bucket.GetObject(key, sdkOptions(ctx)...)
 	if err != nil {
 		return nil, ossx.ObjectInfo{}, translateError("GetObject", err)
 	}
@@ -109,16 +109,16 @@ func (a *Adapter) GetObject(ctx context.Context, key string) (io.ReadCloser, oss
 }
 
 // HeadObject returns metadata via GetObjectMeta.
-func (a *Adapter) HeadObject(_ context.Context, key string) (ossx.ObjectInfo, error) {
+func (a *Adapter) HeadObject(ctx context.Context, key string) (ossx.ObjectInfo, error) {
 	if a.closed {
 		return ossx.ObjectInfo{}, ossx.ErrClosed
 	}
-	return a.headInfo(context.Background(), key)
+	return a.headInfo(ctx, key)
 }
 
 // headInfo builds ObjectInfo from OSS object meta headers.
-func (a *Adapter) headInfo(_ context.Context, key string) (ossx.ObjectInfo, error) {
-	header, err := a.bucket.GetObjectMeta(key)
+func (a *Adapter) headInfo(ctx context.Context, key string) (ossx.ObjectInfo, error) {
+	header, err := a.bucket.GetObjectMeta(key, sdkOptions(ctx)...)
 	if err != nil {
 		return ossx.ObjectInfo{}, translateError("HeadObject", err)
 	}
@@ -142,22 +142,22 @@ func (a *Adapter) headInfo(_ context.Context, key string) (ossx.ObjectInfo, erro
 
 // DeleteObject removes key. Aliyun OSS DeleteObject is idempotent for missing
 // objects; strict semantics are enforced at the BlobStore layer.
-func (a *Adapter) DeleteObject(_ context.Context, key string, _ bool) error {
+func (a *Adapter) DeleteObject(ctx context.Context, key string, _ bool) error {
 	if a.closed {
 		return ossx.ErrClosed
 	}
-	if err := a.bucket.DeleteObject(key); err != nil {
+	if err := a.bucket.DeleteObject(key, sdkOptions(ctx)...); err != nil {
 		return translateError("DeleteObject", err)
 	}
 	return nil
 }
 
 // CopyObject duplicates source to target server-side.
-func (a *Adapter) CopyObject(_ context.Context, source, target string, _ ossx.CopyAdapterOptions) (ossx.ObjectInfo, error) {
+func (a *Adapter) CopyObject(ctx context.Context, source, target string, _ ossx.CopyAdapterOptions) (ossx.ObjectInfo, error) {
 	if a.closed {
 		return ossx.ObjectInfo{}, ossx.ErrClosed
 	}
-	result, err := a.bucket.CopyObject(source, target)
+	result, err := a.bucket.CopyObject(source, target, sdkOptions(ctx)...)
 	if err != nil {
 		return ossx.ObjectInfo{}, translateError("CopyObject", err)
 	}
@@ -171,7 +171,7 @@ func (a *Adapter) CopyObject(_ context.Context, source, target string, _ ossx.Co
 }
 
 // ListObjects returns a bounded page (BR-006).
-func (a *Adapter) ListObjects(_ context.Context, prefix string, max int, continuation string) (ossx.ListPage, error) {
+func (a *Adapter) ListObjects(ctx context.Context, prefix string, max int, continuation string) (ossx.ListPage, error) {
 	if a.closed {
 		return ossx.ListPage{}, ossx.ErrClosed
 	}
@@ -182,7 +182,7 @@ func (a *Adapter) ListObjects(_ context.Context, prefix string, max int, continu
 	if continuation != "" {
 		opts = append(opts, oss.Marker(continuation))
 	}
-	result, err := a.bucket.ListObjects(opts...)
+	result, err := a.bucket.ListObjects(sdkOptions(ctx, opts...)...)
 	if err != nil {
 		return ossx.ListPage{}, translateError("ListObjects", err)
 	}
@@ -211,11 +211,11 @@ func (a *Adapter) ListObjects(_ context.Context, prefix string, max int, continu
 // --- Multipart ---
 
 // InitiateMultipart starts a multipart upload.
-func (a *Adapter) InitiateMultipart(_ context.Context, key string, opts ossx.PutAdapterOptions) (ossx.UploadID, error) {
+func (a *Adapter) InitiateMultipart(ctx context.Context, key string, opts ossx.PutAdapterOptions) (ossx.UploadID, error) {
 	if a.closed {
 		return "", ossx.ErrClosed
 	}
-	imur, err := a.bucket.InitiateMultipartUpload(key, buildPutOptions(opts)...)
+	imur, err := a.bucket.InitiateMultipartUpload(key, sdkOptions(ctx, buildPutOptions(opts)...)...)
 	if err != nil {
 		return "", translateError("InitiateMultipart", err)
 	}
@@ -227,7 +227,7 @@ func (a *Adapter) InitiateMultipart(_ context.Context, key string, opts ossx.Put
 }
 
 // UploadPart stages a part.
-func (a *Adapter) UploadPart(_ context.Context, id ossx.UploadID, partNumber int, body io.Reader, size int64) (ossx.PartETag, error) {
+func (a *Adapter) UploadPart(ctx context.Context, id ossx.UploadID, partNumber int, body io.Reader, size int64) (ossx.PartETag, error) {
 	if a.closed {
 		return ossx.PartETag{}, ossx.ErrClosed
 	}
@@ -241,7 +241,7 @@ func (a *Adapter) UploadPart(_ context.Context, id ossx.UploadID, partNumber int
 	if partSize < 0 {
 		partSize = int64(-1)
 	}
-	result, err := a.bucket.UploadPart(imur, body, partSize, partNumber, nil)
+	result, err := a.bucket.UploadPart(imur, body, partSize, partNumber, sdkOptions(ctx)...)
 	if err != nil {
 		return ossx.PartETag{}, translateError("UploadPart", err)
 	}
@@ -253,7 +253,7 @@ func (a *Adapter) UploadPart(_ context.Context, id ossx.UploadID, partNumber int
 }
 
 // ListParts returns uploaded parts.
-func (a *Adapter) ListParts(_ context.Context, id ossx.UploadID) ([]ossx.PartETag, error) {
+func (a *Adapter) ListParts(ctx context.Context, id ossx.UploadID) ([]ossx.PartETag, error) {
 	if a.closed {
 		return nil, ossx.ErrClosed
 	}
@@ -263,7 +263,7 @@ func (a *Adapter) ListParts(_ context.Context, id ossx.UploadID) ([]ossx.PartETa
 	if !ok {
 		return nil, ossx.WrapExport(ossx.ErrorKindNotFound, "ListParts", "upload id not found", nil)
 	}
-	lpr, err := a.bucket.ListUploadedParts(imur)
+	lpr, err := a.bucket.ListUploadedParts(imur, sdkOptions(ctx)...)
 	if err != nil {
 		return nil, translateError("ListParts", err)
 	}
@@ -279,7 +279,7 @@ func (a *Adapter) ListParts(_ context.Context, id ossx.UploadID) ([]ossx.PartETa
 }
 
 // CompleteMultipart finalizes the upload.
-func (a *Adapter) CompleteMultipart(_ context.Context, id ossx.UploadID, parts []ossx.PartETag) (ossx.ObjectInfo, error) {
+func (a *Adapter) CompleteMultipart(ctx context.Context, id ossx.UploadID, parts []ossx.PartETag) (ossx.ObjectInfo, error) {
 	if a.closed {
 		return ossx.ObjectInfo{}, ossx.ErrClosed
 	}
@@ -293,7 +293,7 @@ func (a *Adapter) CompleteMultipart(_ context.Context, id ossx.UploadID, parts [
 	for _, p := range parts {
 		sdkParts = append(sdkParts, oss.UploadPart{PartNumber: p.PartNumber, ETag: p.ETag})
 	}
-	result, err := a.bucket.CompleteMultipartUpload(imur, sdkParts)
+	result, err := a.bucket.CompleteMultipartUpload(imur, sdkParts, sdkOptions(ctx)...)
 	if err != nil {
 		return ossx.ObjectInfo{}, translateError("CompleteMultipart", err)
 	}
@@ -316,7 +316,7 @@ func (a *Adapter) CompleteMultipart(_ context.Context, id ossx.UploadID, parts [
 }
 
 // AbortMultipart cancels the upload. Idempotent.
-func (a *Adapter) AbortMultipart(_ context.Context, id ossx.UploadID) error {
+func (a *Adapter) AbortMultipart(ctx context.Context, id ossx.UploadID) error {
 	if a.closed {
 		return nil
 	}
@@ -329,7 +329,7 @@ func (a *Adapter) AbortMultipart(_ context.Context, id ossx.UploadID) error {
 	if !ok {
 		return nil // idempotent: unknown id already aborted
 	}
-	if err := a.bucket.AbortMultipartUpload(imur); err != nil {
+	if err := a.bucket.AbortMultipartUpload(imur, sdkOptions(ctx)...); err != nil {
 		return translateError("AbortMultipart", err)
 	}
 	return nil
@@ -338,11 +338,11 @@ func (a *Adapter) AbortMultipart(_ context.Context, id ossx.UploadID) error {
 // --- Presign ---
 
 // PresignURL signs a URL via bucket.SignURL (FR-006).
-func (a *Adapter) PresignURL(_ context.Context, key string, op ossx.PresignOperation, ttlSeconds int64, opts ossx.PresignAdapterOptions) (ossx.PresignedURL, error) {
+func (a *Adapter) PresignURL(ctx context.Context, key string, op ossx.PresignOperation, ttlSeconds int64, opts ossx.PresignAdapterOptions) (ossx.PresignedURL, error) {
 	if a.closed {
 		return ossx.PresignedURL{}, ossx.ErrClosed
 	}
-	method := oss.HTTPGet
+	var method oss.HTTPMethod
 	switch op {
 	case ossx.PresignPut:
 		method = oss.HTTPPut
@@ -355,7 +355,7 @@ func (a *Adapter) PresignURL(_ context.Context, key string, op ossx.PresignOpera
 	if opts.ContentType != "" {
 		options = append(options, oss.ContentType(opts.ContentType))
 	}
-	url, err := a.bucket.SignURL(key, method, ttlSeconds, options...)
+	url, err := a.bucket.SignURL(key, method, ttlSeconds, sdkOptions(ctx, options...)...)
 	if err != nil {
 		return ossx.PresignedURL{}, translateError("PresignURL", err)
 	}
@@ -369,11 +369,11 @@ func (a *Adapter) PresignURL(_ context.Context, key string, op ossx.PresignOpera
 // --- Lifecycle ---
 
 // Health probes the bucket via a lightweight GetBucketInfo (client-level call).
-func (a *Adapter) Health(_ context.Context) error {
+func (a *Adapter) Health(ctx context.Context) error {
 	if a.closed {
 		return ossx.ErrClosed
 	}
-	if _, err := a.client.GetBucketInfo(a.cfg.Bucket); err != nil {
+	if _, err := a.client.GetBucketInfo(a.cfg.Bucket, sdkOptions(ctx)...); err != nil {
 		return translateError("Health", err)
 	}
 	return nil
@@ -398,6 +398,16 @@ func buildPutOptions(opts ossx.PutAdapterOptions) []oss.Option {
 	for k, v := range opts.Metadata {
 		out = append(out, oss.Meta(k, v))
 	}
+	return out
+}
+
+func sdkOptions(ctx context.Context, options ...oss.Option) []oss.Option {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	out := make([]oss.Option, 0, len(options)+1)
+	out = append(out, options...)
+	out = append(out, oss.WithContext(ctx))
 	return out
 }
 

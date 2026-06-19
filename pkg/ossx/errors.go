@@ -1,9 +1,6 @@
 package ossx
 
-import (
-	"errors"
-	"fmt"
-)
+import "errors"
 
 // ErrorKind classifies an ossx error for retry/routing decisions. The taxonomy
 // mirrors kernel errx.ErrorKind so callers and resiliencx classifiers can map
@@ -223,9 +220,4 @@ var (
 // context.Canceled via Cause walk in blobstore.go).
 func ctxCancelledError(err error) error {
 	return wrapError(ErrorKindCanceled, "", "operation cancelled", err)
-}
-
-// fmtErrorf wraps fmt.Errorf for the few call sites that need formatting.
-func fmtErrorf(format string, args ...any) error {
-	return fmt.Errorf(format, args...)
 }

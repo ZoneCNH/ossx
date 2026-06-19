@@ -1,0 +1,22 @@
+{
+  "schema_version": "ossx.release-manifest.v1",
+  "repository": "github.com/ZoneCNH/ossx",
+  "version": "v1.2.0",
+  "date": "2026-06-19",
+  "status": "local-acceptance",
+  "evidence": [
+    "GOWORK=off go test ./... -race -count=1",
+    "GOWORK=off go test ./pkg/ossx -count=1 -covermode=atomic -coverprofile=pkg-ossx.coverage.out (100.0% statements)",
+    "GOWORK=off go vet ./...",
+    "GOWORK=off go build ./...",
+    "OSSX_LIVE_INTEGRATION=1 go test -tags integration ./adapters/aliyun/ -timeout 180s (5/5 PASS against bucket x-go: Health/PutGetDelete/List/Multipart/Presign)"
+  ],
+  "credential_gated": [
+    "Aliyun OSS live integration (verified locally 2026-06-19; external CI artifact pending)"
+  ],
+  "pending_public_evidence": [
+    "external CI artifact",
+    "downstream adoption",
+    "production soak"
+  ]
+}

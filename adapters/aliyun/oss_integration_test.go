@@ -8,7 +8,8 @@
 //
 // Credentials come from ossx.ConfigFromEnv() reading FOUNDATIONX_OSSX_* env
 // vars (loaded from sre/secrets/env/ossx.env by the test harness). These are
-// long-term static AK/SK for bucket x-go (ap-northeast-1); never commit them.
+// operator-owned live credentials; never commit long-term static AK/SK,
+// bucket-specific endpoints, or environment dumps.
 //
 // Run locally:
 //
@@ -21,6 +22,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -202,11 +204,29 @@ func TestIntegrationPresign(t *testing.T) {
 	if !strings.Contains(url.URL, "aliyuncs.com") && !strings.Contains(url.URL, cfgCNAME(adapter)) {
 		t.Fatalf("presigned URL does not look like an OSS URL: %s", url.URL)
 	}
-	// Note: actually fetching via the presigned URL requires an HTTP client and
-	// is gated by network/CORS; we assert URL shape + method here. A full fetch
-	// assertion is added when the test harness provisions a fetch client.
 	if url.Method != "GET" {
 		t.Fatalf("method mismatch: got %q want GET", url.Method)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url.URL, nil)
+	if err != nil {
+		t.Fatalf("presigned GET request: %v", err)
+	}
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("presigned GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		t.Fatalf("presigned GET status: got %d body=%q", resp.StatusCode, body)
+	}
+	got, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("presigned GET read: %v", err)
+	}
+	if string(got) != payload {
+		t.Fatalf("presigned GET body mismatch: got %q want %q", got, payload)
 	}
 }
 

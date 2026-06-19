@@ -1,6 +1,28 @@
 # Changelog
 
-## v1.1.0 — 2026-06-18
+## v1.2.0 — 2026-06-19
+
+### Added — Release-grade test hardening + CI/CD pipeline + live integration evidence
+- **`pkg/ossx` 100.0% statement coverage**: `acceptance_coverage_test.go` closes every remaining branch (config-from-env edges, error wrappers/context mapping, checksum verifier states, multipart lifecycle validation, retry + circuit-breaker half-open/cooldown, public helpers + nil-safe hooks, InMemoryAdapter closed-state paths, presign global-max fallback). CI `test` job enforces `100.0%` as a hard gate (`pkg-ossx.coverage.out`).
+- **Full CI/CD pipeline on `sre/` machine pools** (`.github/workflows/ci.yml`): `ci-preflight` → `build` / `test` (100% coverage gate) / `lint` (vet + golangci-lint) / `boundary` (xlibgate trust: identity, release-consistency, template-residue, testkit-prod-import, secret-redaction) / `integration` (env-gated live Aliyun; required on release tags) / `secret-scan` (gitleaks) / `evidence` → `release-preflight` (sre/deploy, VERSION↔tag↔manifest↔repo-contract↔CHANGELOG consistency) → `release-publish` (gh release) → `post-release-smoke`; plus `rollback-drill` on workflow_dispatch.
+- **`release/` artifacts**: `manifest/latest.json` + `evidence/local-acceptance.md` record reproducible acceptance commands and pending-public-evidence gaps.
+- **`VERSION` file + `.repo-contract.yaml` maturity block**: explicit version source-of-truth and maturity matrix (live_integration_complete tracked).
+
+### Tests
+- Verified locally 2026-06-19 against real bucket `x-go` (ap-northeast-1): 5/5 integration PASS (Health 1.13s, PutGetDelete 4.66s, List 3.78s, Multipart 7.66s, Presign 2.80s).
+- `pkg/ossx` statement coverage: **100.0%** (was 83.9% at v1.1.0). All-package coverage non-blocking.
+- Reproducible local gate: `go test ./... -race`, `go vet ./...`, `go build ./...` all green.
+
+### Changed
+- `adapters/aliyun/oss.go`, `pkg/ossx/{blobstore,errors,helpers,presign,retry}.go`: refactor to eliminate uncovered branches (no public API change; signatures stable).
+- CI integration gate keys now source `FOUNDATIONX_OSSX_*` secrets; skips cleanly when credentials absent (except release tags).
+
+### Notes
+- Identity unchanged: Aliyun OSS single-provider adapter (SPEC v1.2.0). Still NOT S3-compatible / generic.
+- `factory=false` remains until public evidence archive, external CI artifacts, downstream adoption, and production-soak records are present (BLK-008 governance track).
+- SPEC: `https://github.com/ZoneCNH/ZoneCNH/blob/main/module/ossx/SPEC.md`.
+
+## v1.1.0
 
 ### Added — Real Aliyun OSS adapter + complete OSS functionality
 - **`adapters/aliyun/`**: Real Aliyun OSS adapter (`github.com/aliyun/aliyun-oss-go-sdk/oss` v3.0.2) implementing `ossx.StoreAdapter`. SDK isolated to this package (FR-008 / BR-011); provider errors translated to typed `*Error` at the boundary (SPEC §11).
@@ -16,8 +38,9 @@
 - **Checksum streaming verification** (`helpers.go wrapChecksumVerifier`): Get with `VerifyChecksum` tees through a hasher without buffering (FR-004 / BR-010).
 
 ### Tests
-- 24 unit tests in `pkg/ossx/` covering TC-001..TC-013 (`go test -race` passes; 61.2% statement coverage).
-- 5 live integration tests in `adapters/aliyun/` (build-tag + env-gate, mirrors taosx) against real bucket `x-go` (ap-northeast-1): Health, PutGetDelete round-trip, List pagination, full Multipart, Presign — all pass (TC-010).
+- Local reproducible gate passes: `GOWORK=off go test ./... -race -count=1`, `go vet ./...`, `go build ./...`, `golangci-lint run ./...`, secret scan, and import-boundary scan.
+- `pkg/ossx` coverage reports 83.9% statement coverage via `GOWORK=off go test -count=1 -coverprofile=/tmp/ossx_pkg.cover ./pkg/ossx`.
+- 5 Aliyun integration tests are build-tag and environment gated; the local no-credential gate passes with 5 intentional skips. Live OSS pass evidence remains pending a credentialed evidence archive.
 
 ### Changed
 - `doc.go` / `README.md`: converged to Aliyun-only identity; removed S3/MinIO/multi-provider wording (was identity residue).
@@ -32,7 +55,7 @@
 
 ### Notes
 - Identity: Aliyun OSS single-provider adapter (SPEC v1.1.1+ §1). NOT S3-compatible / generic.
-- `factory=false` rationale still holds until full public-evidence archive (BLK-008) closes; real adapter + integration evidence now in place.
+- `factory=false` remains until the public evidence archive, live Aliyun pass evidence, external CI artifacts, downstream adoption, and production-soak records are present.
 - SPEC: `https://github.com/ZoneCNH/ZoneCNH/blob/main/module/ossx/SPEC.md`.
 
 ## v1.0.2-alpha — 2026-06-18

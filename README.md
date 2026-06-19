@@ -5,10 +5,10 @@ over Aliyun OSS with streaming semantics, multipart lifecycle, presigned URL
 policy, lifecycle/retention/permission validation, retry/circuit resilience,
 and observex-compatible observability hooks.
 
-> Identity (v1.1.0): Aliyun OSS single-provider adapter (NOT a generic
+> Identity (v1.2.0): Aliyun OSS single-provider adapter (NOT a generic
 > S3-compatible / multi-provider abstraction). See module/ossx/SPEC.md §1.
 
-## 状态：v1.1.0
+## 状态：v1.2.0
 
 - ✅ 真实 Aliyun OSS adapter（`adapters/aliyun/`，SDK 隔离，FR-008）
 - ✅ 流式 Put/Get（`io.Reader`/`io.ReadCloser`，不缓冲整对象，FR-004）
@@ -18,7 +18,7 @@ and observex-compatible observability hooks.
 - ✅ Retry + Circuit Breaker（resiliencx 语义，FR-003/005）
 - ✅ observex 兼容 Hooks（Metrics/Tracer/Logger，nil-safe，FR-009）
 - ✅ 三态 Health（config/unreachable/degraded，FR-010）
-- ✅ 24 单元测试 + 5 集成测试（真实 bucket `x-go`，TC-010）
+- ✅ 本地验收通过：pkg/ossx 覆盖率 **100.0%**；实盘 Aliyun integration 5/5 PASS（真实 bucket `x-go`：Health/PutGetDelete/List/Multipart/Presign）
 
 ## 安装
 
@@ -30,7 +30,7 @@ import (
 ```
 
 ```bash
-go get github.com/ZoneCNH/ossx@v1.1.0
+go get github.com/ZoneCNH/ossx@v1.2.0
 ```
 
 ## 快速使用（Aliyun OSS）
@@ -100,7 +100,9 @@ Provider SDK 类型必须封装在 adapter 内部（FR-008 / BR-011）。
 
 ## 集成测试
 
-集成测试连真实 Aliyun OSS bucket（双层门禁，镜像 taosx）：
+集成测试采用 build tag + 环境变量双层门禁。未设置 `OSSX_LIVE_INTEGRATION=1`
+或凭证时，本地验收按设计 SKIP；真实 Aliyun OSS pass 需在凭证环境执行并归档
+evidence。
 
 ```bash
 # 加载 sre/secrets/env/ossx.env（gitignored，不进公开仓库）
