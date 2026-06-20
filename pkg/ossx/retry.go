@@ -57,6 +57,13 @@ func (p retryPolicy) delay(attempt int) time.Duration {
 // retryClassRetryable. Context cancellation is honored between attempts.
 // Returns the last error if all attempts fail. Non-retryable / fatal errors
 // return immediately.
+//
+// This loop is intentionally kept local rather than delegated to
+// resiliencx/retry because resiliencx.retry.Do has no non-retryable error
+// sentinel — it would exhaust all attempts even for fatal errors.
+// The classifyError guard (retryClassRetryable / retryClassFatal) must be
+// preserved in the retry path.
+// See: github.com/ZoneCNH/resiliencx/pkg/resiliencx/retry/retry.go
 func (p retryPolicy) withRetry(ctx context.Context, op string, fn func(context.Context) error) error {
 	var lastErr error
 	for attempt := 1; attempt <= p.MaxAttempts; attempt++ {
