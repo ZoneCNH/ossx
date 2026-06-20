@@ -6,7 +6,7 @@ import (
 )
 
 // presign.go implements FR-006: presigned URL policy enforcement + audit
-// masking. Signing is delegated to the StoreAdapter (BR-009: secrets never
+// masking. Signing is delegated to the PresignAdapter (BR-009: secrets never
 // leave the adapter). The BlobStore enforces the operation allowlist, TTL cap,
 // and checksum constraints BEFORE calling the adapter.
 
@@ -20,7 +20,7 @@ import (
 //
 // The returned PresignedURL is opaque; secrets are never logged. An AuditEvent
 // is emitted with the sanitized key scope, method, TTL, and result.
-func (b *blobStore) Presign(ctx context.Context, key Key, op PresignOperation, opts PresignOptions) (PresignedURL, error) {
+func (b *Store) Presign(ctx context.Context, key Key, op PresignOperation, opts PresignOptions) (PresignedURL, error) {
 	start := nowFn()
 	if err := b.checkClosed(); err != nil {
 		return PresignedURL{}, err
@@ -75,7 +75,7 @@ func (b *blobStore) Presign(ctx context.Context, key Key, op PresignOperation, o
 	var url PresignedURL
 	_, err := b.run(ctx, "presign", key, func(ctx context.Context) error {
 		var perr error
-		url, perr = b.adapter.PresignURL(ctx, string(key), op, opts.TTL, adapterOpts)
+		url, perr = b.presigner.PresignURL(ctx, string(key), op, opts.TTL, adapterOpts)
 		return perr
 	})
 	if err != nil {
@@ -90,7 +90,7 @@ func (b *blobStore) Presign(ctx context.Context, key Key, op PresignOperation, o
 // in the audit payload (BR-009). Only the sanitized key scope, method, TTL,
 // and result are recorded. rawURL is passed only to validate it was generated
 // (non-empty on success) but is never logged.
-func (b *blobStore) emitPresignAudit(ctx context.Context, start time.Time, key Key, op PresignOperation, opts PresignOptions, rawURL string, errKind ErrorKind) {
+func (b *Store) emitPresignAudit(ctx context.Context, start time.Time, key Key, op PresignOperation, opts PresignOptions, rawURL string, errKind ErrorKind) {
 	result := "ok"
 	if errKind != "" {
 		result = string(errKind)

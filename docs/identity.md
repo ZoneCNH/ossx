@@ -2,7 +2,7 @@
 
 ## 我是谁
 
-`ossx` 是 FoundationX 的 **对象存储扩展模块**，提供 OSS/S3 兼容的对象存储客户端封装。
+`ossx` 是 FoundationX 的 **对象存储扩展模块**，提供 Aliyun OSS 单 provider 对象存储客户端封装。它不是 S3-compatible / 多 provider 抽象。
 
 ## 我做什么
 
@@ -13,6 +13,7 @@
 ## 我不做什么
 
 - 不是文件业务逻辑 — 存储语义由调用方定义
+- 不是 S3-compatible 通用对象存储抽象 — 只承诺 Aliyun OSS adapter
 - 不是模板源 — 模板生成属于 xlib-standard
 - 不依赖其他存储模块
 

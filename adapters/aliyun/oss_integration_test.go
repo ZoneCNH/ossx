@@ -7,22 +7,24 @@
 //  2. Env gate:  `OSSX_LIVE_INTEGRATION=1` — must be set or the test skips.
 //
 // Credentials come from ossx.ConfigFromEnv() reading FOUNDATIONX_OSSX_* env
-// vars (loaded from sre/secrets/env/ossx.env by the test harness). These are
-// operator-owned live credentials; never commit long-term static AK/SK,
-// bucket-specific endpoints, or environment dumps.
+// vars loaded from the operator-owned sre/secrets/env/dev.md by the test
+// harness. Never commit long-term static AK/SK, bucket-specific endpoints, or
+// environment dumps.
 //
 // Run locally:
 //
-//	set -a; source /home/ZoneCNH/sre/secrets/env/ossx.env; set +a
+//	export FOUNDATIONX_OSSX_* from /home/ZoneCNH/sre/secrets/env/dev.md
 //	OSSX_LIVE_INTEGRATION=1 go test -tags integration ./adapters/aliyun/ -v -timeout 120s
 package aliyun
 
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"strings"
 	"testing"
@@ -40,11 +42,11 @@ type integrationSettings struct {
 func loadIntegrationSettings(t *testing.T) integrationSettings {
 	t.Helper()
 	if os.Getenv("OSSX_LIVE_INTEGRATION") != "1" {
-		t.Skip("set OSSX_LIVE_INTEGRATION=1 (and source sre/secrets/env/ossx.env) to run live Aliyun OSS integration")
+		t.Skip("set OSSX_LIVE_INTEGRATION=1 with env loaded from sre/secrets/env/dev.md to run live Aliyun OSS integration")
 	}
 	cfg, err := ossx.ConfigFromEnv()
 	if err != nil {
-		t.Fatalf("ConfigFromEnv: %v (did you source sre/secrets/env/ossx.env?)", err)
+		t.Fatalf("ConfigFromEnv: %v (did you load sre/secrets/env/dev.md?)", err)
 	}
 	// Unique prefix per test run to avoid key collisions across runs.
 	prefix := fmt.Sprintf("ossx-it/%d/", time.Now().UnixNano())
@@ -109,6 +111,24 @@ func TestIntegrationPutGetDelete(t *testing.T) {
 	}
 	if hinfo.ETag == "" {
 		t.Fatalf("HeadObject: empty ETag")
+	}
+}
+
+func TestIntegrationDeleteStrictMissing(t *testing.T) {
+	adapter, _, prefix := newLiveAdapter(t)
+	ctx := context.Background()
+	defer adapter.Close(ctx)
+
+	key := prefix + "strict-missing.txt"
+	if err := adapter.DeleteObject(ctx, key, false); err != nil {
+		t.Fatalf("non-strict DeleteObject missing: %v", err)
+	}
+	err := adapter.DeleteObject(ctx, key, true)
+	if err == nil {
+		t.Fatal("strict DeleteObject missing: expected not found")
+	}
+	if !errors.Is(err, ossx.ErrNotFound) {
+		t.Fatalf("strict DeleteObject missing: got %v", err)
 	}
 }
 
@@ -201,8 +221,8 @@ func TestIntegrationPresign(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PresignURL: %v", err)
 	}
-	if !strings.Contains(url.URL, "aliyuncs.com") && !strings.Contains(url.URL, cfgCNAME(adapter)) {
-		t.Fatalf("presigned URL does not look like an OSS URL: %s", url.URL)
+	if !presignURLUsesExpectedHost(url.URL, cfgCNAME(adapter)) {
+		t.Fatal("presigned URL host did not match Aliyun OSS or configured CNAME")
 	}
 	if url.Method != "GET" {
 		t.Fatalf("method mismatch: got %q want GET", url.Method)
@@ -232,3 +252,16 @@ func TestIntegrationPresign(t *testing.T) {
 
 // cfgCNAME returns the CNAME (if set) for presign URL validation.
 func cfgCNAME(a *Adapter) string { return a.cfg.CNAME }
+
+func presignURLUsesExpectedHost(rawURL, cname string) bool {
+	parsed, err := neturl.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Host)
+	if strings.Contains(host, "aliyuncs.com") {
+		return true
+	}
+	cname = strings.ToLower(strings.TrimSpace(cname))
+	return cname != "" && (host == cname || strings.HasSuffix(host, "."+cname))
+}

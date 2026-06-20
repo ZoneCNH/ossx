@@ -16,8 +16,9 @@ type Config struct {
 	UseSSL    bool // secure (HTTPS) transport — Aliyun OSS default true
 	CNAME     string
 
-	// Credentials are populated by the composition root from a secret store
-	// (e.g., sre/secrets/env/ossx.env). Sanitize() masks them for logs.
+	// Credentials are populated by the composition root from an operator-owned
+	// secret store (for example, sre/secrets/env/dev.md). Sanitize masks them
+	// for logs.
 	AccessKey string
 	SecretKey string
 
@@ -64,9 +65,9 @@ type PolicyConfig struct {
 
 // LifecyclePolicy bounds object lifecycle transitions (FR-007).
 type LifecyclePolicy struct {
-	Enabled       bool
-	MinDays       int // days before transition; negative invalid
-	StorageClass  string
+	Enabled      bool
+	MinDays      int // days before transition; negative invalid
+	StorageClass string
 }
 
 // RetentionPolicy bounds object retention (FR-007). Negative or contradictory

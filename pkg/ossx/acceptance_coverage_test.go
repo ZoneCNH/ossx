@@ -531,8 +531,10 @@ type acceptanceScriptedAdapter struct {
 	uploadPart   PartETag
 	presigned    PresignedURL
 
-	listMax    int
-	closeCalls int
+	listMax      int
+	deleteCalls  int
+	deleteStrict bool
+	closeCalls   int
 }
 
 func (a *acceptanceScriptedAdapter) Name() string {
@@ -557,7 +559,9 @@ func (a *acceptanceScriptedAdapter) HeadObject(context.Context, string) (ObjectI
 	return a.headInfo, a.headErr
 }
 
-func (a *acceptanceScriptedAdapter) DeleteObject(context.Context, string, bool) error {
+func (a *acceptanceScriptedAdapter) DeleteObject(_ context.Context, _ string, strict bool) error {
+	a.deleteCalls++
+	a.deleteStrict = strict
 	return a.deleteErr
 }
 
@@ -718,6 +722,43 @@ func TestAcceptanceBlobStoreDeleteAndExistsErrorMappings(t *testing.T) {
 	exists, err = existsStore.Exists(ctx, Key("tenant/key"))
 	if err != nil || !exists {
 		t.Fatalf("successful head should map to exists=true nil, exists=%v err=%v", exists, err)
+	}
+}
+
+func TestAcceptanceBlobStoreStrictDeletePreflightsIdempotentAdapter(t *testing.T) {
+	ctx := context.Background()
+	notFound := newError(ErrorKindNotFound, "adapter", "missing")
+	adapter := &acceptanceScriptedAdapter{headErr: notFound}
+	store, err := NewBlobStore(acceptanceSingleAttemptConfig(), adapter, Hooks{})
+	if err != nil {
+		t.Fatalf("NewBlobStore: %v", err)
+	}
+
+	err = store.Delete(ctx, Key("tenant/missing"), DeleteOptions{StrictNotFound: true})
+	if err == nil || errorKind(err) != ErrorKindNotFound {
+		t.Fatalf("strict delete should surface missing object before idempotent delete, got %v", err)
+	}
+	if adapter.deleteCalls != 0 {
+		t.Fatalf("strict missing delete should not call adapter delete, calls=%d", adapter.deleteCalls)
+	}
+}
+
+func TestAcceptanceBlobStoreNonStrictDeleteKeepsIdempotentAdapter(t *testing.T) {
+	ctx := context.Background()
+	adapter := &acceptanceScriptedAdapter{headErr: newError(ErrorKindNotFound, "adapter", "missing")}
+	store, err := NewBlobStore(acceptanceSingleAttemptConfig(), adapter, Hooks{})
+	if err != nil {
+		t.Fatalf("NewBlobStore: %v", err)
+	}
+
+	if err := store.Delete(ctx, Key("tenant/missing"), DeleteOptions{}); err != nil {
+		t.Fatalf("non-strict delete should keep adapter idempotency: %v", err)
+	}
+	if adapter.deleteCalls != 1 {
+		t.Fatalf("non-strict delete should call adapter delete once, calls=%d", adapter.deleteCalls)
+	}
+	if adapter.deleteStrict {
+		t.Fatal("non-strict delete should not pass strict=true to adapter")
 	}
 }
 
@@ -1530,8 +1571,7 @@ func TestAcceptancePresignUsesGlobalMaximumWhenPolicyMaxTTLIsZero(t *testing.T) 
 	if err != nil {
 		t.Fatalf("NewBlobStore: %v", err)
 	}
-	concrete := store.(*blobStore)
-	concrete.cfg.Presign.MaxTTL = 0
+	store.cfg.Presign.MaxTTL = 0
 
 	if _, err := store.Presign(ctx, "tenant/key", PresignGet, PresignOptions{TTL: int64(MaxAllowedPresignTTL.Seconds())}); err != nil {
 		t.Fatalf("Presign should fall back to global max TTL: %v", err)
