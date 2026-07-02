@@ -141,20 +141,8 @@ jobs:
           cache: true
       - name: Install xlibgate
         run: |
-          if command -v xlibgate >/dev/null 2>&1 && xlibgate trust --help >/dev/null 2>&1; then
-            exit 0
-          fi
-
-          if [ -d /home/xlibgate ]; then
-            mkdir -p "$HOME/.local/bin"
-            (cd /home/xlibgate && GOBIN="$HOME/.local/bin" GOWORK=off go install ./cmd/xlibgate)
-            "$HOME/.local/bin/xlibgate" trust --help >/dev/null
-            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-            exit 0
-          fi
-
-          echo "::error::xlibgate trust CLI is not installed. Install the fixed trust build from /home/xlibgate or the next tagged release; v1.0.0 lacks trust and the current untagged remote build has release parser drift."
-          exit 1
+          go install github.com/ZoneCNH/xlibgate/cmd/xlibgate@v1.1.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: Run boundary checks
         run: |
           xlibgate trust identity --repo .
