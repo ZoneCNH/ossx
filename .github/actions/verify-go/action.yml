@@ -1,0 +1,37 @@
+name: Verify local Go toolchain
+description: Verify that the self-hosted SRE runner provides a compatible Go toolchain.
+
+runs:
+  using: composite
+  steps:
+    - name: Verify Go
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        command -v go >/dev/null
+        go version
+
+        required="$(awk '$1 == "go" { print $2; exit }' go.mod)"
+        actual="$(go env GOVERSION | sed 's/^go//')"
+
+        version_parts() {
+          local version="$1"
+          local major minor patch
+          IFS=. read -r major minor patch <<<"$version"
+          patch="${patch%%[^0-9]*}"
+          printf '%s %s %s\n' "${major:-0}" "${minor:-0}" "${patch:-0}"
+        }
+
+        read -r actual_major actual_minor actual_patch < <(version_parts "$actual")
+        read -r required_major required_minor required_patch < <(version_parts "$required")
+
+        if (( actual_major < required_major )) ||
+          (( actual_major == required_major && actual_minor < required_minor )) ||
+          (( actual_major == required_major && actual_minor == required_minor && actual_patch < required_patch )); then
+          echo "::error::Go ${required} or newer is required, runner has ${actual}"
+          exit 1
+        fi
+
+        GOWORK=off go env GOMOD
+        GOWORK=off go env GOMODCACHE

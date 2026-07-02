@@ -1,0 +1,199 @@
+{
+  "records": [
+    {
+      "request_id": "e51155b9-ca68-4285-9044-6dfe144849bf",
+      "target": "worker-2",
+      "status": "failed",
+      "created_at": "2026-06-18T08:26:51.714Z",
+      "notified_at": null,
+      "delivered_at": null,
+      "failed_at": "2026-06-18T08:27:39.813Z",
+      "reason": "codex_startup_no_evidence_after_fallback:tmux_send_keys_sent",
+      "metadata": {
+        "kind": "inbox",
+        "team_name": "home-ossx-omx-context-1bf66bc5",
+        "worker_index": 2,
+        "pane_id": "%64",
+        "trigger_message": "Read $OMX_TEAM_STATE_ROOT/team/home-ossx-omx-context-1bf66bc5/workers/worker-2/inbox.md, work now, report progress, continue assigned work or next feasible task.",
+        "inbox_correlation_key": "startup:worker-2",
+        "transport_preference": "hook_preferred_with_fallback",
+        "fallback_allowed": true,
+        "attempt_count": 2
+      }
+    },
+    {
+      "request_id": "363c8c46-f7db-495c-b901-3b077df498c9",
+      "target": "worker-1",
+      "status": "failed",
+      "created_at": "2026-06-18T08:26:51.733Z",
+      "notified_at": null,
+      "delivered_at": null,
+      "failed_at": "2026-06-18T08:26:54.360Z",
+      "reason": "fallback_attempted_but_unconfirmed:tmux_send_keys_failed:sendKeyAsync: failed to send C-m: can't find pane: %63",
+      "metadata": {
+        "kind": "inbox",
+        "team_name": "home-ossx-omx-context-1bf66bc5",
+        "worker_index": 1,
+        "pane_id": "%63",
+        "trigger_message": "Read $OMX_TEAM_STATE_ROOT/team/home-ossx-omx-context-1bf66bc5/workers/worker-1/inbox.md, work now, report progress, continue assigned work or next feasible task.",
+        "inbox_correlation_key": "startup:worker-1",
+        "transport_preference": "hook_preferred_with_fallback",
+        "fallback_allowed": true,
+        "attempt_count": 2
+      }
+    },
+    {
+      "request_id": "a01162c2-d0a6-4b2f-96de-0657ab5187ae",
+      "target": "worker-3",
+      "status": "failed",
+      "created_at": "2026-06-18T08:26:51.761Z",
+      "notified_at": null,
+      "delivered_at": null,
+      "failed_at": "2026-06-18T08:27:39.901Z",
+      "reason": "codex_startup_no_evidence_after_fallback:tmux_send_keys_sent",
+      "metadata": {
+        "kind": "inbox",
+        "team_name": "home-ossx-omx-context-1bf66bc5",
+        "worker_index": 3,
+        "pane_id": "%65",
+        "trigger_message": "Read $OMX_TEAM_STATE_ROOT/team/home-ossx-omx-context-1bf66bc5/workers/worker-3/inbox.md, work now, report progress, continue assigned work or next feasible task.",
+        "inbox_correlation_key": "startup:worker-3",
+        "transport_preference": "hook_preferred_with_fallback",
+        "fallback_allowed": true,
+        "attempt_count": 2
+      }
+    },
+    {
+      "request_id": "168a6ac2-bbc8-46f0-8357-163fd894cebf",
+      "target": "worker-1",
+      "status": "failed",
+      "created_at": "2026-06-18T08:26:57.395Z",
+      "notified_at": null,
+      "delivered_at": null,
+      "failed_at": "2026-06-18T08:26:59.790Z",
+      "reason": "fallback_attempted_but_unconfirmed:tmux_send_keys_failed:sendToWorker: failed to send text: can't find pane: %63",
+      "metadata": {
+        "kind": "inbox",
+        "team_name": "home-ossx-omx-context-1bf66bc5",
+        "worker_index": 1,
+        "pane_id": "%63",
+        "trigger_message": "Read $OMX_TEAM_STATE_ROOT/team/home-ossx-omx-context-1bf66bc5/workers/worker-1/inbox.md, work now, report progress, continue assigned work or next feasible task.",
+        "intent": "followup-relaunch",
+        "inbox_correlation_key": "startup:worker-1",
+        "transport_preference": "hook_preferred_with_fallback",
+        "fallback_allowed": true,
+        "attempt_count": 1
+      }
+    },
+    {
+      "request_id": "07455f80-d2f3-4c70-aab4-a0a672173a63",
+      "target": "worker-1",
+      "status": "failed",
+      "created_at": "2026-06-18T08:27:02.806Z",
+      "notified_at": null,
+      "delivered_at": null,
+      "failed_at": "2026-06-18T08:27:05.162Z",
+      "reason": "fallback_attempted_but_unconfirmed:tmux_send_keys_failed:sendToWorker: failed to send text: can't find pane: %63",
+      "metadata": {
+        "kind": "inbox",
+        "team_name": "home-ossx-omx-context-1bf66bc5",
+        "worker_index": 1,
+        "pane_id": "%63",
+        "trigger_message": "Read $OMX_TEAM_STATE_ROOT/team/home-ossx-omx-context-1bf66bc5/workers/worker-1/inbox.md, work now, report progress, continue assigned work or next feasible task.",
+        "intent": "followup-relaunch",
+        "inbox_correlation_key": "startup:worker-1",
+        "transport_preference": "hook_preferred_with_fallback",
+        "fallback_allowed": true,
+        "attempt_count": 1
+      }
+    },
+    {
+      "request_id": "2a5b472c-839e-4efa-83c4-f489afc78885",
+      "target": "worker-2",
+      "status": "failed",
+      "created_at": "2026-06-18T08:27:42.840Z",
+      "notified_at": null,
+      "delivered_at": null,
+      "failed_at": "2026-06-18T08:27:45.208Z",
+      "reason": "fallback_attempted_but_unconfirmed:tmux_send_keys_failed:sendToWorker: failed to send text: can't find pane: %64",
+      "metadata": {
+        "kind": "inbox",
+        "team_name": "home-ossx-omx-context-1bf66bc5",
+        "worker_index": 2,
+        "pane_id": "%64",
+        "trigger_message": "Read $OMX_TEAM_STATE_ROOT/team/home-ossx-omx-context-1bf66bc5/workers/worker-2/inbox.md, work now, report progress, continue assigned work or next feasible task.",
+        "intent": "followup-relaunch",
+        "inbox_correlation_key": "startup:worker-2",
+        "transport_preference": "hook_preferred_with_fallback",
+        "fallback_allowed": true,
+        "attempt_count": 1
+      }
+    },
+    {
+      "request_id": "16996854-9b4b-407f-8f7e-993b6c94a260",
+      "target": "worker-3",
+      "status": "failed",
+      "created_at": "2026-06-18T08:27:42.919Z",
+      "notified_at": null,
+      "delivered_at": null,
+      "failed_at": "2026-06-18T08:27:45.345Z",
+      "reason": "fallback_attempted_but_unconfirmed:tmux_send_keys_failed:sendToWorker: failed to send text: can't find pane: %65",
+      "metadata": {
+        "kind": "inbox",
+        "team_name": "home-ossx-omx-context-1bf66bc5",
+        "worker_index": 3,
+        "pane_id": "%65",
+        "trigger_message": "Read $OMX_TEAM_STATE_ROOT/team/home-ossx-omx-context-1bf66bc5/workers/worker-3/inbox.md, work now, report progress, continue assigned work or next feasible task.",
+        "intent": "followup-relaunch",
+        "inbox_correlation_key": "startup:worker-3",
+        "transport_preference": "hook_preferred_with_fallback",
+        "fallback_allowed": true,
+        "attempt_count": 1
+      }
+    },
+    {
+      "request_id": "88136770-5b13-4b18-aaf6-25a6f57c8aab",
+      "target": "worker-2",
+      "status": "failed",
+      "created_at": "2026-06-18T08:27:48.246Z",
+      "notified_at": null,
+      "delivered_at": null,
+      "failed_at": "2026-06-18T08:27:50.522Z",
+      "reason": "fallback_attempted_but_unconfirmed:tmux_send_keys_failed:sendToWorker: failed to send text: can't find pane: %64",
+      "metadata": {
+        "kind": "inbox",
+        "team_name": "home-ossx-omx-context-1bf66bc5",
+        "worker_index": 2,
+        "pane_id": "%64",
+        "trigger_message": "Read $OMX_TEAM_STATE_ROOT/team/home-ossx-omx-context-1bf66bc5/workers/worker-2/inbox.md, work now, report progress, continue assigned work or next feasible task.",
+        "intent": "followup-relaunch",
+        "inbox_correlation_key": "startup:worker-2",
+        "transport_preference": "hook_preferred_with_fallback",
+        "fallback_allowed": true,
+        "attempt_count": 1
+      }
+    },
+    {
+      "request_id": "8e95b2af-32ac-4179-bb11-64957db9923e",
+      "target": "worker-3",
+      "status": "failed",
+      "created_at": "2026-06-18T08:27:48.383Z",
+      "notified_at": null,
+      "delivered_at": null,
+      "failed_at": "2026-06-18T08:27:50.846Z",
+      "reason": "fallback_attempted_but_unconfirmed:tmux_send_keys_failed:sendToWorker: failed to send text: can't find pane: %65",
+      "metadata": {
+        "kind": "inbox",
+        "team_name": "home-ossx-omx-context-1bf66bc5",
+        "worker_index": 3,
+        "pane_id": "%65",
+        "trigger_message": "Read $OMX_TEAM_STATE_ROOT/team/home-ossx-omx-context-1bf66bc5/workers/worker-3/inbox.md, work now, report progress, continue assigned work or next feasible task.",
+        "intent": "followup-relaunch",
+        "inbox_correlation_key": "startup:worker-3",
+        "transport_preference": "hook_preferred_with_fallback",
+        "fallback_allowed": true,
+        "attempt_count": 1
+      }
+    }
+  ]
+}
